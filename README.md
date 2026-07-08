@@ -5,6 +5,8 @@ height range and resolution in an Open3D GUI, and exports a ROS 2
 (`map_server` / `nav2_map_server`) compatible occupancy grid map (PGM + YAML).
 It does not depend on ROS 2 itself and runs as a standalone Python application.
 
+![Demo](demo.gif)
+
 ## Setup
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/).
