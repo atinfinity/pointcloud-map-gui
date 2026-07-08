@@ -166,8 +166,12 @@ class MainWindow:
                 )
             except Exception as e:  # noqa: BLE001
                 traceback.print_exc()
+                # Python unbinds `e` at the end of the except block, so it
+                # must be captured into a plain variable before being used
+                # inside a lambda that runs later on the main thread.
+                error_message = str(e)
                 gui.Application.instance.post_to_main_thread(
-                    self.window, lambda: self._on_load_error(str(e))
+                    self.window, lambda: self._on_load_error(error_message)
                 )
 
         threading.Thread(target=worker, daemon=True).start()
