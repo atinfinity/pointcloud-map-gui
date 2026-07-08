@@ -1,0 +1,21 @@
+[project]
+name = "pointcloud-map-gui"
+version = "0.1.0"
+description = "Point cloud to ROS2 occupancy grid map GUI exporter"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "atinfinity" },
+]
+requires-python = ">=3.10"
+dependencies = [
+    "open3d",
+    "numpy",
+    "pyyaml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
