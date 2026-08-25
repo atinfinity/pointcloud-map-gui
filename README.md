@@ -93,7 +93,7 @@ compared on real data (`ground_removal.py`, all share the same
 | Method | Idea | Parameters |
 |---|---|---|
 | `local_grid` | Minimum Z per XY cell -> 3x3 morphological opening -> bilinear interpolation. Points within `thickness` of that surface are ground. Fast and simple; on steep slopes the per-cell minimum sits below the cell centre, so raise `thickness` or lower `cell_size`. | `cell_size`, `thickness` |
-| `pmf` | Progressive Morphological Filter (Zhang et al. 2003) on the same DEM: the opening window grows from 3 cells up to `max_window` and cells that rise more than a slope-dependent threshold (`slope * dw * cell_size + initial_distance`, capped at `max_distance`) above the opened surface are treated as objects. Handles larger objects sitting on the ground than `local_grid`. | `cell_size`, `max_window`, `slope`, `initial_distance`, `max_distance` |
+| `pmf` (default) | Progressive Morphological Filter (Zhang et al. 2003) on the same DEM: the opening window grows from 3 cells up to `max_window` and cells that rise more than a slope-dependent threshold (`slope * dw * cell_size + initial_distance`, capped at `max_distance`) above the opened surface are treated as objects. Handles larger objects sitting on the ground than `local_grid`. | `cell_size`, `max_window`, `slope`, `initial_distance`, `max_distance` |
 | `csf` | Cloth Simulation Filter (Zhang et al. 2016) via the `cloth-simulation-filter` package: a cloth is dropped onto the inverted cloud and points within `class_threshold` of it are ground. `rigidness` 1 = steep terrain, 3 = flat; `slope_smooth` helps on ramps. | `cloth_resolution`, `rigidness`, `class_threshold`, `slope_smooth` |
 
 To compare the methods on one file outside the GUI:
