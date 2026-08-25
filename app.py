@@ -29,7 +29,10 @@ GRID_NAME = "ground_grid"
 DEFAULT_RESOLUTION = 0.05
 DEFAULT_MIN_BLOB_CELLS = 0  # map cleanup off until the user opts in
 OUT_OF_RANGE_ALPHA = 0.15
-MAP_PREVIEW_MAX_DIM = 200
+MAP_PREVIEW_MAX_DIM = 800
+MAP_PREVIEW_ALPHA = 128  # 0-255 (~0.5); the overlay lets the point cloud show through
+PREVIEW_SCENE_WIDTH_FRACTION = 0.2  # overlay side <= 20% of the 3D view width
+PREVIEW_SCENE_HEIGHT_FRACTION = 0.25  # ... and <= 25% of its height
 GROUND_METHODS = list(ground_removal.DEFAULT_PARAMS)  # combobox order
 NOISE_METHODS = list(noise_removal.DEFAULT_PARAMS)
 
@@ -141,7 +144,11 @@ class MainWindow:
         self.grid_material.base_color = [0.55, 0.55, 0.55, 1.0]
 
         # --- control panel ---
-        panel = gui.Vert(0.5 * em, gui.Margins(em, em, em, em))
+        # Controls live in a scrollable column so a short window scrolls
+        # instead of squeezing widgets on top of each other; the map preview
+        # is overlaid on the 3D view (top-right) by _on_layout so it can be
+        # large without competing with the controls for space.
+        panel = gui.ScrollableVert(0.5 * em, gui.Margins(em, em, em, em))
 
         panel.add_child(gui.Label("Point Cloud"))
         load_button = gui.Button("Load Point Cloud (.pcd/.ply)...")
@@ -152,18 +159,20 @@ class MainWindow:
         panel.add_child(self.info_label)
 
         panel.add_fixed(em)
-        panel.add_child(gui.Label("Noise Removal"))
+        noise_group = gui.CollapsableVert("Noise Removal", 0.25 * em, gui.Margins(em, 0, 0, 0))
         self.noise_section = MethodSection(
-            panel, em, "Remove isolated points", NOISE_METHODS, noise_removal,
+            noise_group, em, "Remove isolated points", NOISE_METHODS, noise_removal,
             self._on_noise_method_changed, self._on_noise_setting_changed,
         )
+        panel.add_child(noise_group)
 
         panel.add_fixed(em)
-        panel.add_child(gui.Label("Ground Removal"))
+        ground_group = gui.CollapsableVert("Ground Removal", 0.25 * em, gui.Margins(em, 0, 0, 0))
         self.ground_section = MethodSection(
-            panel, em, "Remove ground points", GROUND_METHODS, ground_removal,
+            ground_group, em, "Remove ground points", GROUND_METHODS, ground_removal,
             self._on_ground_method_changed, self._on_ground_setting_changed,
         )
+        panel.add_child(ground_group)
 
         panel.add_fixed(em)
         panel.add_child(gui.Label("Height Filter"))
@@ -215,11 +224,13 @@ class MainWindow:
         self.status_label = gui.Label("")
         panel.add_child(self.status_label)
 
-        panel.add_stretch()
-        panel.add_child(gui.Label("Occupancy Grid Preview"))
-        placeholder = np.full((MAP_PREVIEW_MAX_DIM, MAP_PREVIEW_MAX_DIM, 3), 60, dtype=np.uint8)
+        # The preview caption and image are laid out by hand in _on_layout
+        # as an overlay on the scene widget (children added later draw on
+        # top; a Vert would only grant the ImageWidget its pixel size).
+        self.preview_label = gui.Label("Occupancy Grid Preview")
+        placeholder = np.full((MAP_PREVIEW_MAX_DIM, MAP_PREVIEW_MAX_DIM, 4), 60, dtype=np.uint8)
+        placeholder[..., 3] = MAP_PREVIEW_ALPHA
         self.map_preview_widget = gui.ImageWidget(o3d.geometry.Image(placeholder))
-        panel.add_child(self.map_preview_widget)
 
         self._set_height_controls_enabled(False)
 
@@ -227,6 +238,8 @@ class MainWindow:
         self.panel = panel
         self.window.add_child(self.scene_widget)
         self.window.add_child(panel)
+        self.window.add_child(self.preview_label)
+        self.window.add_child(self.map_preview_widget)
         self.window.set_on_layout(self._on_layout)
 
     # ------------------------------------------------------------------
@@ -234,9 +247,32 @@ class MainWindow:
     # ------------------------------------------------------------------
     def _on_layout(self, layout_context):
         r = self.window.content_rect
-        panel_width = 22 * layout_context.theme.font_size
-        self.panel.frame = gui.Rect(r.get_right() - panel_width, r.y, panel_width, r.height)
-        self.scene_widget.frame = gui.Rect(r.x, r.y, r.width - panel_width, r.height)
+        em = layout_context.theme.font_size
+        panel_width = 22 * em
+        panel_x = r.get_right() - panel_width
+
+        scene_width = r.width - panel_width
+        self.panel.frame = gui.Rect(panel_x, r.y, panel_width, r.height)
+        self.scene_widget.frame = gui.Rect(r.x, r.y, scene_width, r.height)
+
+        # Preview overlay: caption + square image in the top-right corner of
+        # the 3D view, sized relative to the view so it stays readable at any
+        # window size without hiding most of the point cloud.
+        label_height = self.preview_label.calc_preferred_size(
+            layout_context, gui.Widget.Constraints()
+        ).height
+        image_side = int(
+            min(
+                scene_width * PREVIEW_SCENE_WIDTH_FRACTION,
+                r.height * PREVIEW_SCENE_HEIGHT_FRACTION - label_height,
+            )
+        )
+        image_side = max(image_side, 1)
+        image_x = r.x + scene_width - em - image_side
+        label_y = r.y + em
+        image_y = label_y + label_height + int(0.25 * em)
+        self.preview_label.frame = gui.Rect(image_x, label_y, image_side, label_height)
+        self.map_preview_widget.frame = gui.Rect(image_x, image_y, image_side, image_side)
 
     def _set_height_controls_enabled(self, enabled):
         for w in (
@@ -425,7 +461,7 @@ class MainWindow:
             result = self._build_occupancy_grid()
         except ValueError:
             return
-        thumbnail = downsample_to_thumbnail(result.grid, MAP_PREVIEW_MAX_DIM)
+        thumbnail = downsample_to_thumbnail(result.grid, MAP_PREVIEW_MAX_DIM, alpha=MAP_PREVIEW_ALPHA)
         self.map_preview_widget.update_image(o3d.geometry.Image(thumbnail))
         self.window.set_needs_layout()
 
