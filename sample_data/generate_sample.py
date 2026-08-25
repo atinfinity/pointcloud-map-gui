@@ -155,8 +155,8 @@ def build_noisy_slope_point_cloud():
 
 def build_ramp_point_cloud():
     """A room mixing flat and sloped floor: a flat lower level (x < 2, z=0),
-    a 20% ramp (2 <= x < 4) rising 0.4m, and a flat upper level (x >= 4,
-    z=0.4), with slight noise. Low boxes stand on each flat level and one on
+    a 35% ramp (2 <= x < 4) rising 0.7m, and a flat upper level (x >= 4,
+    z=0.7), with slight noise. Low boxes stand on each flat level and one on
     the ramp itself, plus a floating obstacle. The flat/slope breaklines are
     where DEM-based ground removal tends to misclassify: too-large windows or
     thresholds either eat the box on the ramp or flag the ramp as an object.
@@ -164,7 +164,7 @@ def build_ramp_point_cloud():
     rng = np.random.default_rng(23)
 
     def floor_z(x, y):
-        return np.clip((x - 2.0) * 0.2, 0.0, 0.4)
+        return np.clip((x - 2.0) * 0.35, 0.0, 0.7)
 
     fx, fy = np.meshgrid(np.arange(0, 6, 0.03), np.arange(0, 6, 0.03))
     fx, fy = fx.ravel(), fy.ravel()
@@ -178,7 +178,7 @@ def build_ramp_point_cloud():
     wall_color = np.tile([0.8, 0.8, 0.85], (walls.shape[0], 1))
 
     # 0.3m boxes: one on the lower flat, one on the ramp, one on the upper
-    # flat. The lower box's top (z=0.3) is below the upper floor (z=0.4), so
+    # flat. The lower box's top (z=0.3) is below the upper floor (z=0.7), so
     # a plain height filter cannot keep it while dropping the upper floor.
     boxes = np.vstack(
         [
