@@ -40,8 +40,8 @@ uv run python main.py
    colormap (blue = low, red = high), and points outside the range are
    rendered translucent/grayed out.
 6. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
-   preview of the resulting occupancy grid is shown in the bottom-right of
-   the panel.
+   preview of the resulting occupancy grid is overlaid on the top-right of
+   the 3D view.
    (Optional) Set "Map Cleanup: min occupied blob (cells)" to 2-4 to erase
    specks: 8-connected groups of `occupied` cells smaller than that are
    turned `free`. 0 or 1 disables it. This catches leftovers no point-level
