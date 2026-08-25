@@ -21,13 +21,17 @@ class OccupancyGridResult:
     height: int
 
 
-def compute_occupancy_grid(points, min_height, max_height, resolution):
+def compute_occupancy_grid(points, min_height, max_height, resolution, exclude_mask=None):
     """Convert an (N, 3) point array into a ROS2 map_server-style occupancy grid.
 
     Cells touched by any point (regardless of height) are considered "known"
     (scanned) territory. Among known cells, those touched by a point whose Z
     falls within [min_height, max_height] are "occupied"; the rest are "free".
     Cells never touched by any point are "unknown".
+
+    `exclude_mask` ((N,) bool, optional) marks points -- typically detected
+    ground -- that still count as "known" (they were scanned) but never
+    make a cell "occupied".
     """
     if points.shape[0] == 0:
         raise ValueError("Point cloud is empty")
@@ -35,6 +39,8 @@ def compute_occupancy_grid(points, min_height, max_height, resolution):
         raise ValueError("min_height must be <= max_height")
     if resolution <= 0:
         raise ValueError("resolution must be > 0")
+    if exclude_mask is not None and exclude_mask.shape != (points.shape[0],):
+        raise ValueError("exclude_mask must have shape (N,)")
 
     xs = points[:, 0]
     ys = points[:, 1]
@@ -57,6 +63,8 @@ def compute_occupancy_grid(points, min_height, max_height, resolution):
     known_grid[rows, cols] = True
 
     height_mask = (zs >= min_height) & (zs <= max_height)
+    if exclude_mask is not None:
+        height_mask &= ~exclude_mask
     occupied_grid = np.zeros((height, width), dtype=bool)
     if np.any(height_mask):
         occupied_grid[rows[height_mask], cols[height_mask]] = True

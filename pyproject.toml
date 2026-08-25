@@ -13,6 +13,7 @@ dependencies = [
     "open3d",
     "numpy",
     "pyyaml",
+    "cloth-simulation-filter>=1.1.7",
 ]
 
 [dependency-groups]

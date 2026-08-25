@@ -3,6 +3,7 @@ and export a ROS2 map_server-compatible occupancy grid (PGM + YAML).
 """
 import os
 import threading
+import time
 import traceback
 
 import numpy as np
@@ -12,6 +13,7 @@ import open3d.visualization.rendering as rendering
 
 from colorize import GRAY_OUT_COLOR, height_colormap_colors
 from ground_grid import build_ground_grid_lines
+from ground_removal import DEFAULT_PARAMS, METHOD_LABELS, default_params, estimate_ground_mask
 from map_preview import downsample_to_thumbnail
 from map_writer import export_map
 from occupancy_grid import compute_occupancy_grid
@@ -24,6 +26,7 @@ GRID_NAME = "ground_grid"
 DEFAULT_RESOLUTION = 0.05
 OUT_OF_RANGE_ALPHA = 0.15
 MAP_PREVIEW_MAX_DIM = 200
+GROUND_METHODS = list(DEFAULT_PARAMS)  # combobox order
 
 
 class MainWindow:
@@ -36,6 +39,8 @@ class MainWindow:
         self.pcd = None  # currently loaded o3d.geometry.PointCloud
         self.points = None  # (N,3) numpy view of pcd.points
         self.height_colors = None  # (N,3) height colormap, fixed per loaded cloud
+        self.ground_mask = None  # (N,) bool ground points, None when removal is off
+        self._ground_job_id = 0  # discards stale results from superseded worker threads
 
         # --- 3D scene widget ---
         self.scene_widget = gui.SceneWidget()
@@ -66,6 +71,44 @@ class MainWindow:
 
         self.info_label = gui.Label("No point cloud loaded.")
         panel.add_child(self.info_label)
+
+        panel.add_fixed(em)
+        panel.add_child(gui.Label("Ground Removal"))
+        self.ground_checkbox = gui.Checkbox("Remove ground points")
+        self.ground_checkbox.set_on_checked(self._on_ground_setting_changed)
+        panel.add_child(self.ground_checkbox)
+        self.ground_method_combo = gui.Combobox()
+        for method in GROUND_METHODS:
+            self.ground_method_combo.add_item(METHOD_LABELS[method])
+        self.ground_method_combo.set_on_selection_changed(self._on_ground_method_changed)
+        panel.add_child(self.ground_method_combo)
+        # One parameter block per method; only the selected one is visible.
+        self.ground_param_edits = {}
+        self.ground_param_blocks = {}
+        for method in GROUND_METHODS:
+            block = gui.Vert(0.25 * em)
+            edits = {}
+            for name, (default, lo, hi) in DEFAULT_PARAMS[method].items():
+                is_int = isinstance(default, int)
+                edit = gui.NumberEdit(gui.NumberEdit.INT if is_int else gui.NumberEdit.DOUBLE)
+                edit.set_limits(lo, hi)
+                if is_int:
+                    edit.int_value = default
+                else:
+                    edit.double_value = default
+                edit.set_on_value_changed(self._on_ground_setting_changed)
+                row = gui.Horiz(0.5 * em)
+                row.add_child(gui.Label(f"{name}:"))
+                row.add_stretch()
+                row.add_child(edit)
+                block.add_child(row)
+                edits[name] = edit
+            self.ground_param_edits[method] = edits
+            self.ground_param_blocks[method] = block
+            panel.add_child(block)
+        self.ground_info_label = gui.Label("")
+        panel.add_child(self.ground_info_label)
+        self._show_ground_param_block(GROUND_METHODS[0])
 
         panel.add_fixed(em)
         panel.add_child(gui.Label("Height Filter"))
@@ -139,8 +182,13 @@ class MainWindow:
             self.min_height_slider,
             self.max_height_slider,
             self.resolution_edit,
+            self.ground_checkbox,
+            self.ground_method_combo,
         ):
             w.enabled = enabled
+        for edits in self.ground_param_edits.values():
+            for edit in edits.values():
+                edit.enabled = enabled
 
     # ------------------------------------------------------------------
     # Loading
@@ -178,6 +226,7 @@ class MainWindow:
 
     def _on_load_success(self, path, pcd):
         self.pcd = pcd
+        self.ground_mask = None
         # np.asarray() on an Open3D vector is a zero-copy view into its buffer,
         # and pcd.colors gets reassigned to a brand new buffer on every
         # height-filter update (whose address the allocator can reuse) -- so
@@ -224,6 +273,7 @@ class MainWindow:
 
         self._set_initial_camera(bbox)
         self.window.set_needs_layout()
+        self._request_ground_update()
 
     def _set_initial_camera(self, bbox):
         center = bbox.get_center()
@@ -250,6 +300,8 @@ class MainWindow:
         min_h, max_h = self._current_height_range()
         zs = self.points[:, 2]
         in_range_mask = (zs >= min_h) & (zs <= max_h)
+        if self.ground_mask is not None:
+            in_range_mask &= ~self.ground_mask
 
         in_pcd = o3d.geometry.PointCloud()
         in_pcd.points = o3d.utility.Vector3dVector(self.points[in_range_mask])
@@ -278,7 +330,9 @@ class MainWindow:
         min_h, max_h = self._current_height_range()
         resolution = self.resolution_edit.double_value
         try:
-            result = compute_occupancy_grid(self.points, min_h, max_h, resolution)
+            result = compute_occupancy_grid(
+                self.points, min_h, max_h, resolution, exclude_mask=self.ground_mask
+            )
         except ValueError:
             return
         thumbnail = downsample_to_thumbnail(result.grid, MAP_PREVIEW_MAX_DIM)
@@ -392,6 +446,84 @@ class MainWindow:
         return self.min_height_slider.double_value, self.max_height_slider.double_value
 
     # ------------------------------------------------------------------
+    # Ground removal
+    # ------------------------------------------------------------------
+    def _selected_ground_method(self):
+        return GROUND_METHODS[self.ground_method_combo.selected_index]
+
+    def _show_ground_param_block(self, method):
+        for name, block in self.ground_param_blocks.items():
+            block.visible = name == method
+        self.window.set_needs_layout()
+
+    def _current_ground_params(self, method):
+        params = default_params(method)
+        for name, edit in self.ground_param_edits[method].items():
+            params[name] = edit.int_value if isinstance(params[name], int) else edit.double_value
+        return params
+
+    def _on_ground_method_changed(self, text, index):
+        self._show_ground_param_block(self._selected_ground_method())
+        self._request_ground_update()
+
+    def _on_ground_setting_changed(self, value):
+        self._request_ground_update()
+
+    def _request_ground_update(self):
+        """Recompute the ground mask for the current method/params on a worker
+        thread (large clouds can take seconds), then refresh the scene."""
+        if self.pcd is None:
+            return
+        self._ground_job_id += 1
+        job_id = self._ground_job_id
+        if not self.ground_checkbox.checked:
+            self.ground_mask = None
+            self.ground_info_label.text = ""
+            self._refresh_point_cloud_geometry()
+            return
+
+        method = self._selected_ground_method()
+        params = self._current_ground_params(method)
+        points = self.points
+        self.status_label.text = f"Estimating ground ({method})..."
+        self.window.set_needs_layout()
+
+        def worker():
+            try:
+                t0 = time.perf_counter()
+                mask = estimate_ground_mask(points, method, **params)
+                elapsed = time.perf_counter() - t0
+                gui.Application.instance.post_to_main_thread(
+                    self.window, lambda: self._on_ground_result(job_id, method, mask, elapsed, None)
+                )
+            except Exception as e:  # noqa: BLE001
+                traceback.print_exc()
+                error_message = str(e)
+                gui.Application.instance.post_to_main_thread(
+                    self.window, lambda: self._on_ground_result(job_id, method, None, 0.0, error_message)
+                )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_ground_result(self, job_id, method, mask, elapsed, error):
+        if job_id != self._ground_job_id:
+            return  # superseded by a newer request
+        if error is not None:
+            self.ground_mask = None
+            self.ground_info_label.text = f"Ground removal failed:\n{error}"
+            self.status_label.text = "Ground removal failed."
+        else:
+            self.ground_mask = mask
+            n_ground = int(mask.sum())
+            self.ground_info_label.text = (
+                f"{method}: {n_ground:,} ground points "
+                f"({100.0 * n_ground / mask.shape[0]:.1f}%) in {elapsed:.2f}s"
+            )
+            self.status_label.text = "Ground estimated."
+        self._refresh_point_cloud_geometry()
+        self.window.set_needs_layout()
+
+    # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
     def _on_export_clicked(self):
@@ -416,7 +548,9 @@ class MainWindow:
         try:
             min_h, max_h = self._current_height_range()
             resolution = self.resolution_edit.double_value
-            result = compute_occupancy_grid(self.points, min_h, max_h, resolution)
+            result = compute_occupancy_grid(
+                self.points, min_h, max_h, resolution, exclude_mask=self.ground_mask
+            )
             pgm_path, yaml_path = export_map(basepath, result)
             self.status_label.text = f"Exported:\n{pgm_path}\n{yaml_path}"
         except Exception as e:  # noqa: BLE001

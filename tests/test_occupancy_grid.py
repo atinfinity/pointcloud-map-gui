@@ -116,3 +116,26 @@ def test_invalid_height_range_raises():
     points = make_synthetic_cloud()
     with pytest.raises(ValueError):
         compute_occupancy_grid(points, min_height=2.0, max_height=1.0, resolution=0.1)
+
+
+def test_exclude_mask_keeps_cells_known_but_not_occupied():
+    points = make_synthetic_cloud()
+    # Mark the whole wall as "ground": its cells must stay known (free)
+    # rather than becoming occupied or unknown.
+    exclude = points[:, 0] == 2.0
+    result = compute_occupancy_grid(
+        points, min_height=0.1, max_height=1.5, resolution=0.1, exclude_mask=exclude
+    )
+    assert not np.any(result.grid == OCCUPIED_VALUE)
+    col = int((2.0 - result.origin_x) / result.resolution)
+    row_from_bottom = int((2.0 - result.origin_y) / result.resolution)
+    image_row = result.height - 1 - row_from_bottom
+    assert result.grid[image_row, col] == FREE_VALUE
+
+
+def test_exclude_mask_wrong_shape_raises():
+    import pytest
+
+    points = make_synthetic_cloud()
+    with pytest.raises(ValueError):
+        compute_occupancy_grid(points, 0.1, 1.5, 0.1, exclude_mask=np.zeros(3, dtype=bool))
