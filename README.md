@@ -53,6 +53,10 @@ uv run python main.py
 Processing order: noise removal -> ground removal -> height filter ->
 occupancy grid -> map cleanup.
 
+Not sure which method or parameter to change? See [TUNING.md](TUNING.md)
+for symptom -> method -> parameter guidance backed by measurements on the
+sample data.
+
 ## Noise removal
 
 Isolated points (floating reflections, dust) would otherwise become spurious
