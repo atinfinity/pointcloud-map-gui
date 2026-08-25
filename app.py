@@ -469,12 +469,14 @@ class MainWindow:
         self._refresh_map_preview()
 
     def _refresh_axes(self, bbox):
-        # Anchor the axes at the point cloud's XY-min/Z-min corner: this is
-        # the same point used as the occupancy grid's origin on export, so
-        # the axes double as a preview of the map origin.
+        # Anchor the axes at the point cloud's XY-min corner: that is the
+        # occupancy grid's origin on export, so the axes double as a preview
+        # of the map origin. Z is pinned to 0 so the axes always sit on the
+        # Z=0 ground grid instead of sinking with stray points below floor
+        # level (the map origin has no meaningful Z anyway).
         size = max(bbox.get_max_extent() * 0.2, 1e-3)
         axes = self._build_axis_arrows(size)
-        axes.translate(bbox.min_bound)
+        axes.translate((bbox.min_bound[0], bbox.min_bound[1], 0.0))
         if self.scene_widget.scene.has_geometry(AXES_NAME):
             self.scene_widget.scene.remove_geometry(AXES_NAME)
         self.scene_widget.scene.add_geometry(AXES_NAME, axes, self.axes_material)
