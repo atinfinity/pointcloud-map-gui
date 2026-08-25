@@ -1,7 +1,7 @@
-"""Generate synthetic point clouds (a flat room, a sloped-floor room, and the
-sloped room with isolated noise) for
-manually exercising the GUI: loading, height-filter visualization, and map
-export. Produces both a .pcd and a .ply file.
+"""Generate synthetic point clouds (a flat room, a sloped-floor room, the
+sloped room with isolated noise, and a room mixing flat floors with a ramp)
+for manually exercising the GUI: loading, height-filter visualization, ground
+removal, and map export. Produces both a .pcd and a .ply file.
 """
 import os
 
@@ -9,6 +9,31 @@ import numpy as np
 import open3d as o3d
 
 OUT_DIR = os.path.dirname(__file__)
+
+
+def _wall_on_floor(floor_z, x0, y0, x1, y1, height=2.5, step=0.03):
+    """Vertical wall from (x0, y0) to (x1, y1) standing on floor_z(x, y)."""
+    n_len = int(np.hypot(x1 - x0, y1 - y0) / step)
+    n_h = int(height / step)
+    t = np.linspace(0, 1, n_len)
+    h = np.linspace(0, height, n_h)
+    tt, hh = np.meshgrid(t, h)
+    xx = x0 + (x1 - x0) * tt
+    yy = y0 + (y1 - y0) * tt
+    zz = floor_z(xx, yy) + hh
+    return np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
+
+
+def _box_on_floor(floor_z, x0, y0, x1, y1, height, step=0.02):
+    """Closed box (top + 4 sides) of the given height standing on floor_z."""
+    bx, by = np.meshgrid(np.arange(x0, x1, step), np.arange(y0, y1, step))
+    bx, by = bx.ravel(), by.ravel()
+    top = np.stack([bx, by, floor_z(bx, by) + height], axis=1)
+    sides = [
+        _wall_on_floor(floor_z, *edge, height=height)
+        for edge in [(x0, y0, x1, y0), (x1, y0, x1, y1), (x1, y1, x0, y1), (x0, y1, x0, y0)]
+    ]
+    return np.vstack([top] + sides)
 
 
 def build_room_point_cloud():
@@ -72,29 +97,14 @@ def build_slope_point_cloud():
     floor = np.stack([fx, fy, fz], axis=1)
     floor_color = np.tile([0.6, 0.5, 0.4], (floor.shape[0], 1))
 
-    def wall(x0, y0, x1, y1, height=2.5):
-        n_len = int(np.hypot(x1 - x0, y1 - y0) / 0.03)
-        n_h = int(height / 0.03)
-        t = np.linspace(0, 1, n_len)
-        h = np.linspace(0, height, n_h)
-        tt, hh = np.meshgrid(t, h)
-        xx = x0 + (x1 - x0) * tt
-        yy = y0 + (y1 - y0) * tt
-        zz = floor_z(xx, yy) + hh
-        return np.stack([xx.ravel(), yy.ravel(), zz.ravel()], axis=1)
-
-    walls = np.vstack([wall(0, 0, 6, 0), wall(0, 6, 6, 6), wall(0, 0, 0, 6), wall(6, 0, 6, 6)])
+    walls = np.vstack(
+        [_wall_on_floor(floor_z, *edge) for edge in [(0, 0, 6, 0), (0, 6, 6, 6), (0, 0, 0, 6), (6, 0, 6, 6)]]
+    )
     wall_color = np.tile([0.8, 0.8, 0.85], (walls.shape[0], 1))
 
     # Low box (0.3m tall) standing on the floor near the low end: its top
     # (z ~= 0.45) is below the floor at the high end (z ~= 0.9).
-    bx, by = np.meshgrid(np.arange(1.0, 1.6, 0.02), np.arange(4.0, 4.6, 0.02))
-    bx, by = bx.ravel(), by.ravel()
-    top = np.stack([bx, by, floor_z(bx, by) + 0.3], axis=1)
-    sides = []
-    for x0, y0, x1, y1 in [(1.0, 4.0, 1.6, 4.0), (1.6, 4.0, 1.6, 4.6), (1.6, 4.6, 1.0, 4.6), (1.0, 4.6, 1.0, 4.0)]:
-        sides.append(wall(x0, y0, x1, y1, height=0.3))
-    box = np.vstack([top] + sides)
+    box = _box_on_floor(floor_z, 1.0, 4.0, 1.6, 4.6, height=0.3)
     box_color = np.tile([0.2, 0.7, 0.2], (box.shape[0], 1))
 
     # Floating obstacle, as in the flat room.
@@ -143,11 +153,63 @@ def build_noisy_slope_point_cloud():
     return pcd
 
 
+def build_ramp_point_cloud():
+    """A room mixing flat and sloped floor: a flat lower level (x < 2, z=0),
+    a 20% ramp (2 <= x < 4) rising 0.4m, and a flat upper level (x >= 4,
+    z=0.4), with slight noise. Low boxes stand on each flat level and one on
+    the ramp itself, plus a floating obstacle. The flat/slope breaklines are
+    where DEM-based ground removal tends to misclassify: too-large windows or
+    thresholds either eat the box on the ramp or flag the ramp as an object.
+    """
+    rng = np.random.default_rng(23)
+
+    def floor_z(x, y):
+        return np.clip((x - 2.0) * 0.2, 0.0, 0.4)
+
+    fx, fy = np.meshgrid(np.arange(0, 6, 0.03), np.arange(0, 6, 0.03))
+    fx, fy = fx.ravel(), fy.ravel()
+    fz = floor_z(fx, fy) + rng.normal(0.0, 0.005, size=fx.size)
+    floor = np.stack([fx, fy, fz], axis=1)
+    floor_color = np.tile([0.6, 0.5, 0.4], (floor.shape[0], 1))
+
+    walls = np.vstack(
+        [_wall_on_floor(floor_z, *edge) for edge in [(0, 0, 6, 0), (0, 6, 6, 6), (0, 0, 0, 6), (6, 0, 6, 6)]]
+    )
+    wall_color = np.tile([0.8, 0.8, 0.85], (walls.shape[0], 1))
+
+    # 0.3m boxes: one on the lower flat, one on the ramp, one on the upper
+    # flat. The lower box's top (z=0.3) is below the upper floor (z=0.4), so
+    # a plain height filter cannot keep it while dropping the upper floor.
+    boxes = np.vstack(
+        [
+            _box_on_floor(floor_z, 0.7, 1.0, 1.3, 1.6, height=0.3),
+            _box_on_floor(floor_z, 2.7, 4.2, 3.3, 4.8, height=0.3),
+            _box_on_floor(floor_z, 4.7, 2.2, 5.3, 2.8, height=0.3),
+        ]
+    )
+    box_color = np.tile([0.2, 0.7, 0.2], (boxes.shape[0], 1))
+
+    ox, oy = np.meshgrid(np.arange(1.0, 2.0, 0.02), np.arange(4.0, 5.0, 0.02))
+    ox, oy = ox.ravel(), oy.ravel()
+    oz = floor_z(ox, oy) + rng.uniform(1.0, 1.8, size=ox.size)
+    obstacle = np.stack([ox, oy, oz], axis=1)
+    obstacle_color = np.tile([0.9, 0.2, 0.2], (obstacle.shape[0], 1))
+
+    points = np.vstack([floor, walls, boxes, obstacle])
+    colors = np.vstack([floor_color, wall_color, box_color, obstacle_color])
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    pcd.colors = o3d.utility.Vector3dVector(colors)
+    return pcd
+
+
 def main():
     for name, builder in (
         ("sample_room", build_room_point_cloud),
         ("sample_slope", build_slope_point_cloud),
         ("sample_slope_noisy", build_noisy_slope_point_cloud),
+        ("sample_ramp", build_ramp_point_cloud),
     ):
         pcd = builder()
         pcd_path = os.path.join(OUT_DIR, f"{name}.pcd")

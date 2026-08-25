@@ -131,7 +131,7 @@ comparison.
 uv run python sample_data/generate_sample.py
 ```
 
-Generates three synthetic point clouds in `sample_data/`:
+Generates four synthetic point clouds in `sample_data/`:
 
 - `sample_room`: a flat floor, walls, and a floating obstacle (height
   1.0-1.8m), useful for exercising the height filter.
@@ -142,6 +142,11 @@ Generates three synthetic point clouds in `sample_data/`:
 - `sample_slope_noisy`: `sample_slope` plus 500 uniformly scattered noise
   points, 30 tiny clusters of 2-5 points and 20 speck clumps of 10-40
   points, for exercising noise removal.
+- `sample_ramp`: flat and sloped floor mixed -- a flat lower level (z=0), a
+  20% ramp rising 0.4m, and a flat upper level (z=0.4) -- with a 0.3m box on
+  each level and one on the ramp, plus a floating obstacle. The lower box's
+  top is below the upper floor, and the flat/slope breaklines are where
+  DEM-based ground removal is most likely to misclassify.
 
 ## Tests
 
