@@ -37,3 +37,12 @@ def test_dtype_is_uint8():
     grid = np.full((50, 50), 205, dtype=np.uint8)
     thumb = downsample_to_thumbnail(grid)
     assert thumb.dtype == np.uint8
+
+
+def test_alpha_adds_constant_alpha_channel():
+    grid = np.random.randint(0, 256, size=(300, 200), dtype=np.uint8)
+    thumb = downsample_to_thumbnail(grid, max_dim=100, alpha=128)
+    assert thumb.shape[2] == 4
+    assert thumb.dtype == np.uint8
+    assert np.all(thumb[:, :, 3] == 128)
+    assert np.array_equal(thumb[:, :, 0], thumb[:, :, 2])
