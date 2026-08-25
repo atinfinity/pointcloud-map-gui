@@ -26,19 +26,60 @@ uv run python main.py
 1. Click "Load Point Cloud (.pcd/.ply)..." and select a point cloud file.
 2. The point cloud is displayed in the 3D view, with point count and XYZ
    bounds shown in the panel.
-3. (Optional) Enable "Remove ground points" under Ground Removal to detect
+3. (Optional) Enable "Remove isolated points" under Noise Removal to drop
+   stray points before anything else happens (see
+   [Noise removal](#noise-removal)). Removed points are shown in translucent
+   red and are excluded from the map entirely -- they do not count as
+   scanned cells and do not enlarge the map bounds.
+4. (Optional) Enable "Remove ground points" under Ground Removal to detect
    the floor even when it slopes or undulates, and pick a method from the
    dropdown (see [Ground removal](#ground-removal)). Detected ground points
    are grayed out in the 3D view and never become `occupied` in the map.
-4. Adjust the height range with the Height Filter's Min/Max sliders (or the
+5. Adjust the height range with the Height Filter's Min/Max sliders (or the
    number fields): points within the range are colored by a height-based
    colormap (blue = low, red = high), and points outside the range are
    rendered translucent/grayed out.
-5. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
+6. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
    preview of the resulting occupancy grid is shown in the bottom-right of
    the panel.
-6. Click "Export Occupancy Grid..." and choose a destination base name to
+   (Optional) Set "Map Cleanup: min occupied blob (cells)" to 2-4 to erase
+   specks: 8-connected groups of `occupied` cells smaller than that are
+   turned `free`. 0 or 1 disables it. This catches leftovers no point-level
+   filter can (clumps touching a wall, ground-removal misses), but also
+   erases real obstacles that small -- keep it just above the speck size.
+7. Click "Export Occupancy Grid..." and choose a destination base name to
    write `<name>.pgm` and `<name>.yaml`.
+
+Processing order: noise removal -> ground removal -> height filter ->
+occupancy grid -> map cleanup.
+
+## Noise removal
+
+Isolated points (floating reflections, dust) would otherwise become spurious
+`occupied`/known cells and stretch the map bounds. Noise removal runs first
+and simply deletes those points. Four methods are implemented so they can be
+compared on real data (`noise_removal.py`, all share the same
+`points -> (N,) bool` interface, True = remove):
+
+| Method | Idea | Parameters |
+|---|---|---|
+| `cluster` (default) | DBSCAN (`eps`, `min_points`); unlabeled points and clusters smaller than `min_cluster_size` -> noise. The only method that also removes small dense clumps (10-40 points), which the per-point tests below keep and which then appear as specks on the map. Raise `min_cluster_size` if specks remain, lower it if thin real structures disappear. Slowest (DBSCAN). | `eps`, `min_points`, `min_cluster_size` |
+| `radius` | Fewer than `min_neighbors` points within `radius` -> noise (`remove_radius_outlier`). The literal definition of "isolated". | `radius`, `min_neighbors` |
+| `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
+| `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
+
+To compare them on one file outside the GUI (optionally chaining ground
+removal so the maps reflect the full pipeline):
+
+```bash
+uv run python compare_noise_removal.py path/to/cloud.pcd --out-dir out/ \
+    --min-height 0.1 --max-height 1.5 --ground-method pmf --min-blob-cells 3
+```
+
+This prints removed point count, ratio, run time, resulting map size and
+occupied cell count per method plus pairwise IoU between the noise masks, and
+writes `out/<name>_<method>.ply` (noise = red) and
+`out/<name>_<method>.pgm/.yaml` (plus a `_none` baseline).
 
 ## Ground removal
 
@@ -78,6 +119,8 @@ comparison.
   that is not a detected ground point is `occupied` (pixel value 0); a known cell with no point in range is
   `free` (pixel value 254); a cell that never contains any point is
   `unknown` (pixel value 205).
+- Map cleanup (if enabled) then turns occupied blobs smaller than the
+  configured cell count into `free`.
 - The output YAML follows the standard `map_server` format, including
   `image` / `resolution` / `origin` / `negate` / `occupied_thresh` /
   `free_thresh`.
@@ -88,7 +131,7 @@ comparison.
 uv run python sample_data/generate_sample.py
 ```
 
-Generates two synthetic point clouds in `sample_data/`:
+Generates three synthetic point clouds in `sample_data/`:
 
 - `sample_room`: a flat floor, walls, and a floating obstacle (height
   1.0-1.8m), useful for exercising the height filter.
@@ -96,11 +139,15 @@ Generates two synthetic point clouds in `sample_data/`:
   0.3m-tall box standing on it, walls and a floating obstacle. The box top is
   lower than the far end of the floor, so only ground removal can keep the
   box while dropping the floor.
+- `sample_slope_noisy`: `sample_slope` plus 500 uniformly scattered noise
+  points, 30 tiny clusters of 2-5 points and 20 speck clumps of 10-40
+  points, for exercising noise removal.
 
 ## Tests
 
 The GUI-independent core logic (`occupancy_grid.py`, `map_writer.py`,
-`colorize.py`, `ground_grid.py`, `ground_removal.py`, `map_preview.py`) can be run headless with
+`colorize.py`, `ground_grid.py`, `ground_removal.py`, `noise_removal.py`,
+`map_preview.py`) can be run headless with
 pytest.
 
 ```bash

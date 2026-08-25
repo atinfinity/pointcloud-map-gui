@@ -10,6 +10,7 @@ from occupancy_grid import (
     OCCUPIED_VALUE,
     UNKNOWN_VALUE,
     compute_occupancy_grid,
+    remove_small_occupied_blobs,
 )
 from map_writer import export_map
 
@@ -139,3 +140,26 @@ def test_exclude_mask_wrong_shape_raises():
     points = make_synthetic_cloud()
     with pytest.raises(ValueError):
         compute_occupancy_grid(points, 0.1, 1.5, 0.1, exclude_mask=np.zeros(3, dtype=bool))
+
+
+def test_remove_small_occupied_blobs_keeps_large_drops_small():
+    grid = np.full((10, 10), FREE_VALUE, dtype=np.uint8)
+    grid[1, 1:8] = OCCUPIED_VALUE  # 7-cell wall
+    grid[5, 5] = OCCUPIED_VALUE  # single speck
+    grid[8, 2] = OCCUPIED_VALUE  # diagonal pair (8-connected -> size 2)
+    grid[9, 3] = OCCUPIED_VALUE
+    grid[0, 9] = UNKNOWN_VALUE
+    cleaned = remove_small_occupied_blobs(grid, 3)
+    assert (cleaned[1, 1:8] == OCCUPIED_VALUE).all()
+    assert cleaned[5, 5] == FREE_VALUE
+    assert cleaned[8, 2] == FREE_VALUE and cleaned[9, 3] == FREE_VALUE
+    assert cleaned[0, 9] == UNKNOWN_VALUE  # untouched
+    assert grid[5, 5] == OCCUPIED_VALUE  # input not mutated
+
+
+def test_remove_small_occupied_blobs_disabled_returns_input():
+    grid = np.full((4, 4), OCCUPIED_VALUE, dtype=np.uint8)
+    assert remove_small_occupied_blobs(grid, 1) is grid
+    assert remove_small_occupied_blobs(grid, 0) is grid
+    cleaned = remove_small_occupied_blobs(np.full((4, 4), FREE_VALUE, dtype=np.uint8), 5)
+    assert (cleaned == FREE_VALUE).all()

@@ -1,4 +1,5 @@
-"""Generate synthetic point clouds (a flat room, and a sloped-floor room) for
+"""Generate synthetic point clouds (a flat room, a sloped-floor room, and the
+sloped room with isolated noise) for
 manually exercising the GUI: loading, height-filter visualization, and map
 export. Produces both a .pcd and a .ply file.
 """
@@ -112,8 +113,42 @@ def build_slope_point_cloud():
     return pcd
 
 
+def build_noisy_slope_point_cloud():
+    """The sloped room plus isolated noise: 500 uniformly scattered points,
+    30 tiny clusters of 2-5 points and 20 speck clumps of 10-40 points, for
+    exercising noise removal."""
+    rng = np.random.default_rng(11)
+    base = build_slope_point_cloud()
+    points = np.asarray(base.points)
+    colors = np.asarray(base.colors)
+
+    scatter = rng.uniform([0.0, 0.0, -0.5], [6.0, 6.0, 3.0], size=(500, 3))
+    clusters = []
+    for _ in range(30):
+        center = rng.uniform([0.5, 0.5, 0.5], [5.5, 5.5, 2.5])
+        size = rng.integers(2, 6)
+        clusters.append(center + rng.normal(0.0, 0.01, size=(size, 3)))
+    # Medium "speck" clumps of 10-40 points: dense enough to survive
+    # per-point outlier tests, small enough to be dropped by cluster size.
+    for _ in range(20):
+        center = rng.uniform([0.5, 0.5, 0.5], [5.5, 5.5, 2.5])
+        size = rng.integers(10, 41)
+        clusters.append(center + rng.normal(0.0, 0.02, size=(size, 3)))
+    noise = np.vstack([scatter] + clusters)
+    noise_color = np.tile([1.0, 0.0, 1.0], (noise.shape[0], 1))
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.vstack([points, noise]))
+    pcd.colors = o3d.utility.Vector3dVector(np.vstack([colors, noise_color]))
+    return pcd
+
+
 def main():
-    for name, builder in (("sample_room", build_room_point_cloud), ("sample_slope", build_slope_point_cloud)):
+    for name, builder in (
+        ("sample_room", build_room_point_cloud),
+        ("sample_slope", build_slope_point_cloud),
+        ("sample_slope_noisy", build_noisy_slope_point_cloud),
+    ):
         pcd = builder()
         pcd_path = os.path.join(OUT_DIR, f"{name}.pcd")
         ply_path = os.path.join(OUT_DIR, f"{name}.ply")
