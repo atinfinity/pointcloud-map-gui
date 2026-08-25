@@ -18,17 +18,18 @@ headless alongside occupancy_grid.py.
 import numpy as np
 
 # Parameter metadata shared by the GUI and the CLI: name -> (default, min, max).
+# Dict order is the GUI combobox order; the first entry is the default method.
 DEFAULT_PARAMS = {
-    "local_grid": {
-        "cell_size": (0.5, 0.05, 5.0),
-        "thickness": (0.10, 0.0, 2.0),
-    },
     "pmf": {
         "cell_size": (0.5, 0.05, 5.0),
         "max_window": (33, 3, 201),
         "slope": (0.3, 0.0, 5.0),
         "initial_distance": (0.10, 0.0, 2.0),
         "max_distance": (1.0, 0.0, 10.0),
+    },
+    "local_grid": {
+        "cell_size": (0.5, 0.05, 5.0),
+        "thickness": (0.10, 0.0, 2.0),
     },
     "csf": {
         "cloth_resolution": (0.5, 0.05, 5.0),
@@ -248,8 +249,8 @@ def ground_mask_csf(
 
 
 METHODS = {
-    "local_grid": ground_mask_local_grid,
     "pmf": ground_mask_pmf,
+    "local_grid": ground_mask_local_grid,
     "csf": ground_mask_csf,
 }
 
