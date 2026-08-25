@@ -2,7 +2,7 @@
 
     uv run python compare_ground_removal.py input.pcd --out-dir out/ \\
         [--methods local_grid pmf csf] [--param pmf.slope=0.5 ...] \\
-        [--min-height 0.1 --max-height 1.5 --resolution 0.05]
+        [--min-height 0.1 --max-height 1.5 --resolution 0.05] [--min-blob-cells 3]
 
 Prints a table of ground point counts / timings and pairwise agreement (IoU)
 between methods, and writes per method:
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from colorize import GRAY_OUT_COLOR, height_colormap_colors  # noqa: E402
 from ground_removal import DEFAULT_PARAMS, METHODS, default_params  # noqa: E402
 from map_writer import export_map  # noqa: E402
-from occupancy_grid import compute_occupancy_grid  # noqa: E402
+from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs  # noqa: E402
 
 
 def parse_param_overrides(items):
@@ -53,6 +53,7 @@ def main(argv=None):
     parser.add_argument("--min-height", type=float, default=None)
     parser.add_argument("--max-height", type=float, default=None)
     parser.add_argument("--resolution", type=float, default=0.05)
+    parser.add_argument("--min-blob-cells", type=int, default=0, help="map cleanup: drop occupied blobs smaller than this")
     args = parser.parse_args(argv)
 
     import open3d as o3d
@@ -73,6 +74,7 @@ def main(argv=None):
 
     print(f"{name}: {n:,} points, height filter [{min_h:.3f}, {max_h:.3f}], resolution {args.resolution}")
     baseline = compute_occupancy_grid(points, min_h, max_h, args.resolution)
+    baseline.grid = remove_small_occupied_blobs(baseline.grid, args.min_blob_cells)
     export_map(os.path.join(args.out_dir, f"{name}_none"), baseline)
     n_occ_base = int(np.count_nonzero(baseline.grid == 0))
     print(f"baseline (no removal): {n_occ_base:,} occupied cells\n")
@@ -92,6 +94,7 @@ def main(argv=None):
         masks[method] = mask
 
         result = compute_occupancy_grid(points, min_h, max_h, args.resolution, exclude_mask=mask)
+        result.grid = remove_small_occupied_blobs(result.grid, args.min_blob_cells)
         export_map(os.path.join(args.out_dir, f"{name}_{method}"), result)
         n_occ = int(np.count_nonzero(result.grid == 0))
 

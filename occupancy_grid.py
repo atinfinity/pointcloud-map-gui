@@ -5,6 +5,7 @@ Pure numpy logic, no Open3D dependency, so it can be unit tested headless.
 from dataclasses import dataclass
 
 import numpy as np
+from scipy import ndimage
 
 OCCUPIED_VALUE = 0
 FREE_VALUE = 254
@@ -85,3 +86,26 @@ def compute_occupancy_grid(points, min_height, max_height, resolution, exclude_m
         width=width,
         height=height,
     )
+
+
+def remove_small_occupied_blobs(grid, min_cells):
+    """Return a copy of an occupancy image where 8-connected groups of
+    occupied cells smaller than `min_cells` are turned free.
+
+    Map-level cleanup for "specks": leftover noise clumps, ground-removal
+    misses or single stray points that each produce one or two occupied
+    cells. Those cells were scanned, so they become FREE rather than UNKNOWN.
+    `min_cells` <= 1 disables the filter.
+    """
+    if min_cells <= 1:
+        return grid
+    occupied = grid == OCCUPIED_VALUE
+    labels, n_labels = ndimage.label(occupied, structure=np.ones((3, 3), dtype=int))
+    if n_labels == 0:
+        return grid
+    sizes = np.bincount(labels.ravel())
+    sizes[0] = min_cells  # background is never removed
+    small = sizes[labels] < min_cells
+    cleaned = grid.copy()
+    cleaned[small & occupied] = FREE_VALUE
+    return cleaned

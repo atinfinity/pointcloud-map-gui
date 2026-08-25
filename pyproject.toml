@@ -14,6 +14,7 @@ dependencies = [
     "numpy",
     "pyyaml",
     "cloth-simulation-filter>=1.1.7",
+    "scipy>=1.15.3",
 ]
 
 [dependency-groups]
