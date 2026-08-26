@@ -131,8 +131,11 @@ larger clouds by voxel subsampling. If interaction still drags:
   set the final value before exporting. The preview runs off the UI thread,
   so it lags rather than blocks.
 - Noise and ground removal run over the full cloud too, and neither is
-  affected by the display limit. See `voxel_count` in section 2 for the
-  cheapest noise method on huge clouds.
+  affected by the display limit. Neither blocks the window either -- ground
+  removal on a thread, noise removal in its own process -- so a slow method
+  costs you the wait, not the interaction. See `voxel_count` in section 2 for
+  the cheapest noise method on huge clouds: 0.2 s where `cluster` takes 3 s on
+  1.5 million points.
 
 ## 6. Quick recipes
 

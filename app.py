@@ -2,6 +2,7 @@
 and export a ROS2 map_server-compatible occupancy grid (PGM + YAML).
 """
 import os
+import sys
 import threading
 import time
 import traceback
@@ -19,6 +20,7 @@ import ground_removal
 import noise_removal
 from map_preview import downsample_to_thumbnail
 from map_writer import export_map
+from noise_worker import NoiseWorker
 from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
 from pointcloud_io import load_point_cloud
 
@@ -121,7 +123,10 @@ class MethodSection:
 
 
 class MainWindow:
-    def __init__(self):
+    def __init__(self, noise_worker=None):
+        # Without a started worker this falls back to a thread, which is
+        # correct but freezes the GUI while Open3D holds the GIL.
+        self.noise_worker = noise_worker if noise_worker is not None else NoiseWorker()
         self.window = gui.Application.instance.create_window(
             "Point Cloud -> Occupancy Grid Exporter", 1280, 800
         )
@@ -745,22 +750,15 @@ class MainWindow:
         self.status_label.text = f"Removing noise ({method})..."
         self.window.set_needs_layout()
 
-        def worker():
-            try:
-                t0 = time.perf_counter()
-                mask = noise_removal.estimate_noise_mask(points, method, **params)
-                elapsed = time.perf_counter() - t0
-                gui.Application.instance.post_to_main_thread(
-                    self.window, lambda: self._on_noise_result(job_id, method, mask, elapsed, None)
-                )
-            except Exception as e:  # noqa: BLE001
-                traceback.print_exc()
-                error_message = str(e)
-                gui.Application.instance.post_to_main_thread(
-                    self.window, lambda: self._on_noise_result(job_id, method, None, 0.0, error_message)
-                )
+        # Estimation runs in a separate process: the Open3D methods behind
+        # most of these hold the GIL, so a thread would freeze the GUI for as
+        # long as they run. See noise_worker.
+        def on_done(mask, elapsed, error):
+            gui.Application.instance.post_to_main_thread(
+                self.window, lambda: self._on_noise_result(job_id, method, mask, elapsed, error)
+            )
 
-        threading.Thread(target=worker, daemon=True).start()
+        self.noise_worker.submit(points, method, params, on_done)
 
     def _on_noise_result(self, job_id, method, mask, elapsed, error):
         if job_id != self._noise_job_id:
@@ -906,6 +904,19 @@ class MainWindow:
 
 
 def run():
+    # Start the estimation process before the GUI. Spawning is cheapest while
+    # this process is still simple, and a child started afterwards would
+    # inherit whatever state Open3D's own threads are in.
+    noise_worker = NoiseWorker()
+    if not noise_worker.start():
+        print(
+            f"Noise removal will run in-process and freeze the window while it does: "
+            f"{noise_worker.failure}",
+            file=sys.stderr,
+        )
     gui.Application.instance.initialize()
-    MainWindow()
-    gui.Application.instance.run()
+    MainWindow(noise_worker)
+    try:
+        gui.Application.instance.run()
+    finally:
+        noise_worker.close()

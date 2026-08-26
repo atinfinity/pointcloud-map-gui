@@ -118,6 +118,15 @@ compared on real data (`noise_removal.py`, all share the same
 | `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
 | `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
 
+All of these except `voxel_count` are Open3D calls that hold the GIL for their
+whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
+thread cannot help with that: while one runs, no other Python code executes, so
+the window stops handling the mouse. Estimation therefore runs in a separate
+process (`noise_worker.py`), started at launch and fed the cloud through shared
+memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
+process cannot be started the work falls back to a thread, which is correct but
+freezes the window while it runs.
+
 To compare them on one file outside the GUI (optionally chaining ground
 removal so the maps reflect the full pipeline):
 
