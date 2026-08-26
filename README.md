@@ -9,7 +9,11 @@ It does not depend on ROS 2 itself and runs as a standalone Python application.
 
 ## Setup
 
-Dependencies are managed with [uv](https://docs.astral.sh/uv/).
+Requires Python 3.10-3.12. Open3D 0.19.0 (its latest release) publishes wheels
+only up to CPython 3.12 and ships no sdist, so 3.13+ cannot install it.
+Dependencies are managed with [uv](https://docs.astral.sh/uv/), which reads the
+pinned version from `.python-version` and downloads it automatically -- so this
+works even if your system Python is newer.
 
 ```bash
 uv sync

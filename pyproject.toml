@@ -8,7 +8,9 @@ license-files = ["LICENSE"]
 authors = [
     { name = "atinfinity" },
 ]
-requires-python = ">=3.10"
+# Upper bound: Open3D 0.19.0 (the latest release) ships wheels only up to cp312
+# and has no sdist, so 3.13+ cannot install it.
+requires-python = ">=3.10,<3.13"
 dependencies = [
     "open3d",
     "numpy",
