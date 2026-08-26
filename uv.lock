@@ -1011,7 +1011,7 @@ wheels = [
 [[package]]
 name = "pointcloud-map-gui"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "cloth-simulation-filter" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },

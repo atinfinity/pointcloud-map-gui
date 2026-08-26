@@ -1,12 +1,9 @@
-import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from map_preview import downsample_to_thumbnail
-from occupancy_grid import FREE_VALUE, OCCUPIED_VALUE, UNKNOWN_VALUE
+from pointcloud_map_gui.map_preview import downsample_to_thumbnail
+from pointcloud_map_gui.occupancy_grid import FREE_VALUE, OCCUPIED_VALUE, UNKNOWN_VALUE
 
 
 def test_small_grid_is_unchanged():

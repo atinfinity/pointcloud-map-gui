@@ -1,11 +1,8 @@
-import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from display_lod import select_display_indices
+from pointcloud_map_gui.display_lod import select_display_indices
 
 
 def _grid_cloud(n_side=60, extent=6.0):

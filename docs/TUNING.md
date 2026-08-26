@@ -3,7 +3,8 @@
 Practical notes on choosing a noise-removal / ground-removal method and
 which parameter to reach for when the result is wrong. Numbers quoted below
 were measured on the bundled `sample_data/` clouds with
-`compare_noise_removal.py` / `compare_ground_removal.py`; re-run them on
+`pointcloud_map_gui.tools.compare_noise_removal` /
+`...compare_ground_removal`; re-run them on
 your own data before trusting a rule of thumb.
 
 Processing order is noise removal -> ground removal -> height filter ->
@@ -158,6 +159,6 @@ Verify any recipe with the compare scripts and look at the `_<method>.ply`
 outputs (noise = red, ground = gray) before trusting the map:
 
 ```bash
-uv run python compare_ground_removal.py sample_data/sample_ramp.pcd --out-dir out/ \
+uv run python -m pointcloud_map_gui.tools.compare_ground_removal sample_data/sample_ramp.pcd --out-dir out/ \
     --min-height 0.1 --max-height 1.5 --param pmf.cell_size=0.25
 ```

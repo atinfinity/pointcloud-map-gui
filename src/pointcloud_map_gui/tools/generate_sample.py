@@ -3,12 +3,14 @@ sloped room with isolated noise, and a room mixing flat floors with a ramp)
 for manually exercising the GUI: loading, height-filter visualization, ground
 removal, and map export. Produces both a .pcd and a .ply file.
 """
+import argparse
 import os
 
 import numpy as np
 import open3d as o3d
 
-OUT_DIR = os.path.dirname(__file__)
+from .. import paths
+
 
 
 def _wall_on_floor(floor_z, x0, y0, x1, y1, height=2.5, step=0.03):
@@ -421,7 +423,16 @@ def build_benchmark_point_cloud(n_points=2_000_000):
     return pcd
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="where to write the clouds (default: the repository's sample_data/)",
+    )
+    args = parser.parse_args(argv)
+    out_dir = args.out_dir or str(paths.require_sample_data_dir())
+    os.makedirs(out_dir, exist_ok=True)
     for name, builder in (
         ("sample_room", build_room_point_cloud),
         ("sample_slope", build_slope_point_cloud),
@@ -429,8 +440,8 @@ def main():
         ("sample_ramp", build_ramp_point_cloud),
     ):
         pcd = builder()
-        pcd_path = os.path.join(OUT_DIR, f"{name}.pcd")
-        ply_path = os.path.join(OUT_DIR, f"{name}.ply")
+        pcd_path = os.path.join(out_dir, f"{name}.pcd")
+        ply_path = os.path.join(out_dir, f"{name}.ply")
         o3d.io.write_point_cloud(pcd_path, pcd)
         o3d.io.write_point_cloud(ply_path, pcd)
         print(f"Wrote {len(pcd.points)} points to:\n  {pcd_path}\n  {ply_path}")
@@ -438,7 +449,7 @@ def main():
     # .pcd only: a .ply of a cloud this size would be tens of MB more in the
     # repository for a file nothing reads.
     pcd = build_large_site_point_cloud()
-    pcd_path = os.path.join(OUT_DIR, "sample_large_site.pcd")
+    pcd_path = os.path.join(out_dir, "sample_large_site.pcd")
     o3d.io.write_point_cloud(pcd_path, pcd)
     print(f"Wrote {len(pcd.points)} points to:\n  {pcd_path}")
 

@@ -1,14 +1,11 @@
-import os
-import sys
 import threading
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import noise_removal
-from noise_worker import LatestOnly, NoiseWorker
+from pointcloud_map_gui import noise_removal
+from pointcloud_map_gui.noise_worker import LatestOnly, NoiseWorker
 
 
 def _cloud(n=4000, seed=0):

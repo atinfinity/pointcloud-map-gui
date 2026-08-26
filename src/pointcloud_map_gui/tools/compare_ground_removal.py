@@ -12,17 +12,14 @@ plus out/<name>_none.pgm/.yaml as the no-removal baseline.
 """
 import argparse
 import os
-import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from colorize import GRAY_OUT_COLOR, height_colormap_colors  # noqa: E402
-from ground_removal import DEFAULT_PARAMS, METHODS, default_params  # noqa: E402
-from map_writer import export_map  # noqa: E402
-from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs  # noqa: E402
+from ..colorize import GRAY_OUT_COLOR, height_colormap_colors
+from ..ground_removal import DEFAULT_PARAMS, METHODS, default_params
+from ..map_writer import export_map
+from ..occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
 
 
 def parse_param_overrides(items):
@@ -58,7 +55,7 @@ def main(argv=None):
 
     import open3d as o3d
 
-    from pointcloud_io import load_point_cloud
+    from ..pointcloud_io import load_point_cloud
 
     pcd = load_point_cloud(args.input)
     points = np.asarray(pcd.points)

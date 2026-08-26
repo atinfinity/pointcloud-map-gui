@@ -12,11 +12,11 @@ brought up the GUI inherits whatever locks Open3D's threads happened to hold,
 which can deadlock the child; spawning costs 0.01 s here and works on platforms
 without fork. Spawn resolves the child entry point by module and function name,
 so `_serve` lives in this module and importing it must stay free of side
-effects -- in particular it must never start the GUI.
+effects -- in particular it must never start the GUI. The child reaches the
+rest of the code through the installed package, so nothing has to be told
+where the source is.
 """
 import multiprocessing as mp
-import os
-import sys
 import threading
 import time
 
@@ -27,15 +27,13 @@ _SHUTDOWN = None
 _STOP_TIMEOUT = 5.0
 
 
-def _serve(conn, repo_path):
+def _serve(conn):
     """Child process: answer estimation jobs until told to stop."""
-    sys.path.insert(0, repo_path)
-
     from multiprocessing import shared_memory
 
     import numpy as np
 
-    import noise_removal
+    from pointcloud_map_gui import noise_removal
 
     # noise_removal imports Open3D lazily, inside the methods that need it.
     # Paying that here means the first job costs what every later one does
@@ -143,11 +141,7 @@ class NoiseWorker:
         try:
             context = mp.get_context("spawn")
             conn, child = context.Pipe()
-            process = context.Process(
-                target=_serve,
-                args=(child, os.path.dirname(os.path.abspath(__file__))),
-                daemon=True,
-            )
+            process = context.Process(target=_serve, args=(child,), daemon=True)
             process.start()
             # Published only now: an unstarted Process cannot be joined, so
             # letting the failure path see one would raise over the real error.
@@ -257,7 +251,7 @@ class NoiseWorker:
         for as long as Open3D holds the GIL."""
 
         def work():
-            import noise_removal
+            from pointcloud_map_gui import noise_removal
 
             started_at = time.perf_counter()
             try:
