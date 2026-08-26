@@ -127,8 +127,10 @@ uv run python -m pointcloud_map_gui.tools.generate_sample [--out-dir DIR]
 |---|---|---|
 | `--out-dir DIR` | the repository's `sample_data/` | Where to write the clouds |
 
-Output is deterministic: regenerating in place leaves the `.pcd` files
-byte-identical. See [sample-data.md](sample-data.md) for what each cloud is.
+Output is deterministic across machines: regenerating in place leaves every
+file byte-identical, on any platform. Coordinates are rounded to float32 for
+exactly that reason -- see [sample-data.md](sample-data.md), which also says
+what each cloud is for.
 
 ## benchmark_display
 

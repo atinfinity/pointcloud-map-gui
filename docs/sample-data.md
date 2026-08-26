@@ -2,7 +2,16 @@
 
 The clouds under `sample_data/` are generated, not recorded. Each one exists
 to exercise a particular thing, and the generator reproduces them byte for
-byte, so a measurement quoted against one of them can be repeated.
+byte on any machine, so a measurement quoted against one of them can be
+repeated.
+
+Coordinates are rounded to float32 before they are written. PLY stores
+coordinates as double and PCD as float32, and at full float64 precision the
+two disagreed about the same cloud: `rng.normal` reaches the platform's libm
+through the ziggurat's exp/log, so macOS arm64 and Linux x86_64 differed by a
+few ULP -- around 1e-16 m, invisible in the `.pcd` because float32 rounds it
+away, but baked into the `.ply`. Rounding makes both formats carry the same
+numbers, and the `.pcd` and `.ply` of one cloud now load as identical arrays.
 
 ```bash
 uv run python -m pointcloud_map_gui.tools.generate_sample
