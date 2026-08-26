@@ -40,11 +40,14 @@ uv run python main.py
 4. (Optional) Enable "Remove ground points" under Ground Removal to detect
    the floor even when it slopes or undulates, and pick a method from the
    dropdown (see [Ground removal](#ground-removal)). Detected ground points
-   are grayed out in the 3D view and never become `occupied` in the map.
+   are tinted a faded blue in the 3D view -- still there, still counted as
+   scanned ground, but never `occupied` in the map. They are the only points
+   drawn de-emphasised, so that tint always means "classified as ground"
+   rather than "outside the height filter".
 5. Adjust the height range with the Height Filter's Min/Max sliders (or the
    number fields): points within the range are colored by a height-based
    colormap (blue = low, red = high), and points outside the range are
-   faded into the background.
+   hidden, so nothing you have excluded hides what you have kept.
 6. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
    preview of the resulting occupancy grid is overlaid on the top-right of
    the 3D view.
@@ -117,6 +120,15 @@ compared on real data (`noise_removal.py`, all share the same
 | `radius` | Fewer than `min_neighbors` points within `radius` -> noise (`remove_radius_outlier`). The literal definition of "isolated". | `radius`, `min_neighbors` |
 | `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
 | `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
+
+All of these except `voxel_count` are Open3D calls that hold the GIL for their
+whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
+thread cannot help with that: while one runs, no other Python code executes, so
+the window stops handling the mouse. Estimation therefore runs in a separate
+process (`noise_worker.py`), started at launch and fed the cloud through shared
+memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
+process cannot be started the work falls back to a thread, which is correct but
+freezes the window while it runs.
 
 To compare them on one file outside the GUI (optionally chaining ground
 removal so the maps reflect the full pipeline):

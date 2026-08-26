@@ -2,6 +2,7 @@
 and export a ROS2 map_server-compatible occupancy grid (PGM + YAML).
 """
 import os
+import sys
 import threading
 import time
 import traceback
@@ -12,13 +13,14 @@ import open3d.core as o3c
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from colorize import GRAY_OUT_COLOR, fade_to_background, height_colormap_colors
+from colorize import fade_to_background, height_colormap_colors
 from display_lod import select_display_indices
 from ground_grid import build_ground_grid_lines
 import ground_removal
 import noise_removal
 from map_preview import downsample_to_thumbnail
 from map_writer import export_map
+from noise_worker import NoiseWorker
 from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
 from pointcloud_io import load_point_cloud
 
@@ -28,12 +30,17 @@ AXES_NAME = "coordinate_frame"
 GRID_NAME = "ground_grid"
 DEFAULT_RESOLUTION = 0.05
 DEFAULT_MIN_BLOB_CELLS = 0  # map cleanup off until the user opts in
-OUT_OF_RANGE_ALPHA = 0.15
 SCENE_BACKGROUND = np.array([0.35, 0.35, 0.35])
-# Points the user is not currently looking at are drawn faded rather than
-# translucent -- see colorize.fade_to_background for why.
-OUT_OF_RANGE_COLOR = fade_to_background(GRAY_OUT_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
-NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
+# De-emphasised points are drawn faded rather than translucent -- see
+# colorize.fade_to_background for why.
+NOISE_ALPHA = 0.15
+# Ground sits a little stronger than that, and in its own hue: it is now the
+# only category still drawn de-emphasised, and a neutral grey that faint reads
+# as "those points were deleted" rather than "those points are the floor".
+GROUND_ALPHA = 0.30
+GROUND_TINT = np.array([0.35, 0.65, 1.0])
+GROUND_COLOR = fade_to_background(GROUND_TINT, GROUND_ALPHA, SCENE_BACKGROUND)
+NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, NOISE_ALPHA, SCENE_BACKGROUND)
 # Drawing every point of a multi-million-point cloud costs far more than it
 # shows: the view is thinned to this many points unless the user raises it.
 # The occupancy grid and the export always use the full cloud.
@@ -48,6 +55,34 @@ PREVIEW_SCENE_WIDTH_FRACTION = 0.2  # overlay side <= 20% of the 3D view width
 PREVIEW_SCENE_HEIGHT_FRACTION = 0.25  # ... and <= 25% of its height
 GROUND_METHODS = list(ground_removal.DEFAULT_PARAMS)  # combobox order
 NOISE_METHODS = list(noise_removal.DEFAULT_PARAMS)
+
+
+def reindex_ground_mask(ground_mask, previous_removed, new_removed, total):
+    """Move a ground classification onto a point set with different points
+    removed from it, or None if it cannot be carried over.
+
+    Changing the noise filter only adds or removes points; every point that
+    survives keeps whatever it was classified as. Dropping the classification
+    instead leaves the ground drawn in full colour until a fresh estimate
+    arrives -- measured at ~75 ms, which on a cloud that is 40% floor is a
+    visible flash. Points that reappear come back unclassified, until the
+    estimate this is accompanied by refines them.
+
+    `previous_removed` and `new_removed` are noise masks over all `total`
+    points, or None for "nothing removed". `ground_mask` is over whatever
+    survived `previous_removed`.
+    """
+    if ground_mask is None:
+        return None
+    expected = total if previous_removed is None else int((~previous_removed).sum())
+    if ground_mask.shape[0] != expected:
+        return None  # stale, and mis-indexing it would be worse than starting over
+    if previous_removed is None:
+        lifted = ground_mask
+    else:
+        lifted = np.zeros(total, dtype=bool)
+        lifted[~previous_removed] = ground_mask
+    return lifted if new_removed is None else lifted[~new_removed]
 
 
 class MethodSection:
@@ -121,7 +156,10 @@ class MethodSection:
 
 
 class MainWindow:
-    def __init__(self):
+    def __init__(self, noise_worker=None):
+        # Without a started worker this falls back to a thread, which is
+        # correct but freezes the GUI while Open3D holds the GIL.
+        self.noise_worker = noise_worker if noise_worker is not None else NoiseWorker()
         self.window = gui.Application.instance.create_window(
             "Point Cloud -> Occupancy Grid Exporter", 1280, 800
         )
@@ -132,6 +170,11 @@ class MainWindow:
         self.points = None  # (N,3) active points = all_points minus detected noise
         self.noise_points = None  # (M-N,3) removed noise points, for display only
         self.noise_mask = None  # (M,) bool, None when nothing is being removed
+        # A noise result in flight is about to change which points exist, so
+        # ground estimation waits for it rather than producing a mask for
+        # points that are on their way out.
+        self._noise_pending = False
+        self._ground_deferred = False
         self.height_colors = None  # (N,3) height colormap over the active points
         self.ground_mask = None  # (N,) bool ground points, None when removal is off
         # Generation counters discard stale results from superseded worker threads.
@@ -144,6 +187,10 @@ class MainWindow:
         # ground-removal updates then rewrite colors in place and push only
         # those, which is what keeps big clouds interactive.
         self._display_positions = None  # (D,3) float32, active points then noise
+        # What is actually uploaded. Points outside the height filter get NaN
+        # coordinates here, which the renderer culls -- the only way to hide a
+        # point without splitting the geometry, which is what made this slow.
+        self._display_draw_positions = None
         self._display_colors = None  # (D,3) float32, the buffer handed to the GPU
         self._display_base_colors = None  # (Da,3) float32 height colors, unfaded
         self._display_zs = None  # (Da,) float32
@@ -396,22 +443,31 @@ class MainWindow:
 
         bbox = self.pcd.get_axis_aligned_bounding_box()
         self._set_initial_camera(bbox)
-        self._apply_active_points()
+        # Noise first: it marks a result as pending, which is what makes the
+        # ground pass inside _apply_active_points hold off. The other way round
+        # the ground mask is computed for points the noise pass is about to
+        # remove, shown, and then replaced -- which reads as a flicker.
         self._request_noise_update()
+        self._apply_active_points()
 
     def _active_bbox(self):
         return o3d.geometry.AxisAlignedBoundingBox(self.points.min(axis=0), self.points.max(axis=0))
 
-    def _apply_active_points(self):
+    def _apply_active_points(self, ground_mask=None):
         """Refresh everything derived from the active (noise-filtered) point
-        set: info text, height colors, axes/grid, scene, then ground mask."""
+        set: info text, height colors, axes/grid, scene, then ground mask.
+
+        `ground_mask` is the classification carried over from the previous
+        point set where one could be, so the ground keeps its tint until the
+        fresh estimate lands instead of flashing back to full colour.
+        """
         bbox = self._active_bbox()
         # Height colors only depend on each point's Z relative to the active
         # cloud's Z range, which is fixed until the noise filter changes --
         # computing this once and slicing it per height-filter update is much
         # cheaper than recomputing the colormap on every slider tick.
         self.height_colors = height_colormap_colors(self.points)
-        self.ground_mask = None
+        self.ground_mask = ground_mask
         self._rebuild_display_geometry()
         self._refresh_axes(bbox)
         self._refresh_ground_grid(bbox)
@@ -439,7 +495,8 @@ class MainWindow:
 
         Only needed when the point set itself changes (load, noise filter,
         display budget). Height-filter and ground-removal changes go through
-        _update_display_colors, which touches colors alone.
+        _update_display_buffers, which rewrites what is drawn without
+        rebuilding it.
         """
         if self.pcd is None:
             return
@@ -459,11 +516,13 @@ class MainWindow:
         self._display_positions = np.ascontiguousarray(np.vstack([active, noise]), dtype=np.float32)
         self._display_base_colors = np.ascontiguousarray(base, dtype=np.float32)
         self._display_zs = np.ascontiguousarray(active[:, 2], dtype=np.float32)
+        self._display_draw_positions = self._display_positions.copy()
         self._display_colors = np.empty_like(self._display_positions)
-        # Noise never changes color, so it is written once here and the
-        # per-tick rewrite below only ever touches the active slice.
+        # Noise never changes color and is never hidden by the height filter,
+        # so both of its buffers are written once here and the per-tick rewrite
+        # below only ever touches the active slice.
         self._display_colors[self._display_active_count:] = NOISE_DISPLAY_COLOR
-        self._write_display_colors()
+        self._write_display_buffers()
 
         scene = self.scene_widget.scene
         if scene.has_geometry(POINTS_NAME):
@@ -478,34 +537,48 @@ class MainWindow:
     def _display_tensor(self):
         """Tensor point cloud over the display buffers. Tensors created this
         way share the numpy memory, so this is a wrapper, not a copy."""
-        tensor = o3d.t.geometry.PointCloud(o3c.Tensor.from_numpy(self._display_positions))
+        tensor = o3d.t.geometry.PointCloud(o3c.Tensor.from_numpy(self._display_draw_positions))
         tensor.point.colors = o3c.Tensor.from_numpy(self._display_colors)
         return tensor
 
-    def _write_display_colors(self):
-        """Fill the color buffer for the active slice: height colormap inside
-        the filter, faded everywhere else."""
+    def _write_display_buffers(self):
+        """Fill the drawn colors and positions for the active slice.
+
+        Three outcomes per point: inside the height filter and not ground, so
+        drawn in the height colormap; ground, so drawn in its own faded tint
+        whatever the filter says; or outside the filter, so not drawn at all.
+        Hiding is done by writing NaN coordinates rather than by leaving the
+        point out, which would mean rebuilding the geometry on every tick.
+        """
         count = self._display_active_count
         if not count:
             return
         min_h, max_h = self._current_height_range()
-        in_range = (self._display_zs >= min_h) & (self._display_zs <= max_h)
+        visible = (self._display_zs >= min_h) & (self._display_zs <= max_h)
+
+        colors = self._display_colors[:count]
+        np.copyto(colors, self._display_base_colors)
         if self.ground_mask is not None:
             index = self._display_active_index
             ground = self.ground_mask if index is None else self.ground_mask[index]
-            in_range &= ~ground
-        active = self._display_colors[:count]
-        active[:] = OUT_OF_RANGE_COLOR
-        np.copyto(active, self._display_base_colors, where=in_range[:, None])
+            np.copyto(colors, GROUND_COLOR.astype(np.float32), where=ground[:, None])
+            visible |= ground
 
-    def _update_display_colors(self):
-        """Push new colors for an unchanged point set -- the cheap path that
-        a height-filter drag takes."""
+        positions = self._display_draw_positions[:count]
+        np.copyto(positions, self._display_positions[:count])
+        np.copyto(positions, np.float32("nan"), where=~visible[:, None])
+
+    def _update_display_buffers(self):
+        """Push new colors and positions for an unchanged point set -- the
+        cheap path that a height-filter drag takes. Sending positions as well
+        as colors measured free: both are one buffer of the same size."""
         if self._display_positions is None or not self._display_positions.shape[0]:
             return
-        self._write_display_colors()
+        self._write_display_buffers()
         self.scene_widget.scene.scene.update_geometry(
-            POINTS_NAME, self._display_tensor(), rendering.Scene.UPDATE_COLORS_FLAG
+            POINTS_NAME,
+            self._display_tensor(),
+            rendering.Scene.UPDATE_COLORS_FLAG | rendering.Scene.UPDATE_POINTS_FLAG,
         )
 
     def _refresh_info_label(self):
@@ -548,7 +621,7 @@ class MainWindow:
             return False
         if self._colors_dirty:
             self._colors_dirty = False
-            self._update_display_colors()
+            self._update_display_buffers()
         if self._preview_dirty:
             self._preview_dirty = False
             self._request_map_preview()
@@ -734,9 +807,11 @@ class MainWindow:
             return
         self._noise_job_id += 1
         job_id = self._noise_job_id
+        self._noise_pending = False
         if not self.noise_section.enabled:
             self.noise_section.info_label.text = ""
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
 
         method = self.noise_section.selected_method
@@ -745,35 +820,32 @@ class MainWindow:
         self.status_label.text = f"Removing noise ({method})..."
         self.window.set_needs_layout()
 
-        def worker():
-            try:
-                t0 = time.perf_counter()
-                mask = noise_removal.estimate_noise_mask(points, method, **params)
-                elapsed = time.perf_counter() - t0
-                gui.Application.instance.post_to_main_thread(
-                    self.window, lambda: self._on_noise_result(job_id, method, mask, elapsed, None)
-                )
-            except Exception as e:  # noqa: BLE001
-                traceback.print_exc()
-                error_message = str(e)
-                gui.Application.instance.post_to_main_thread(
-                    self.window, lambda: self._on_noise_result(job_id, method, None, 0.0, error_message)
-                )
+        # Estimation runs in a separate process: the Open3D methods behind
+        # most of these hold the GIL, so a thread would freeze the GUI for as
+        # long as they run. See noise_worker.
+        def on_done(mask, elapsed, error):
+            gui.Application.instance.post_to_main_thread(
+                self.window, lambda: self._on_noise_result(job_id, method, mask, elapsed, error)
+            )
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._noise_pending = True
+        self.noise_worker.submit(points, method, params, on_done)
 
     def _on_noise_result(self, job_id, method, mask, elapsed, error):
         if job_id != self._noise_job_id:
-            return  # superseded by a newer request
+            return  # superseded by a newer request; a newer one is still pending
+        self._noise_pending = False
         if error is not None:
             self.noise_section.info_label.text = f"Noise removal failed:\n{error}"
             self.status_label.text = "Noise removal failed."
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
         if mask.all():
             self.noise_section.info_label.text = "All points classified as noise; ignoring."
             self.status_label.text = "Noise removal rejected."
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
         n_noise = int(mask.sum())
         self.noise_section.info_label.text = (
@@ -782,6 +854,13 @@ class MainWindow:
         )
         self.status_label.text = "Noise removed."
         self._set_noise_mask(mask)
+        self._run_deferred_ground_update()
+
+    def _run_deferred_ground_update(self):
+        """Issue the ground pass that was held back, unless applying the noise
+        mask already rebuilt the point set and issued one itself."""
+        if self._ground_deferred:
+            self._request_ground_update()
 
     def _set_noise_mask(self, mask):
         # A mask that removes nothing is the same state as no mask at all, and
@@ -794,6 +873,13 @@ class MainWindow:
             # for it. Toggling a filter that turns out to remove nothing (or
             # turning one off that never removed anything) must not pay that.
             return
+        carried = (
+            None
+            if self.all_points is None
+            else reindex_ground_mask(
+                self.ground_mask, self.noise_mask, mask, self.all_points.shape[0]
+            )
+        )
         self.noise_mask = mask
         if mask is None:
             self.points = self.all_points
@@ -801,7 +887,7 @@ class MainWindow:
         else:
             self.points = self.all_points[~mask]
             self.noise_points = self.all_points[mask]
-        self._apply_active_points()
+        self._apply_active_points(carried)
 
     def _noise_mask_unchanged(self, mask):
         if self.noise_mask is None or mask is None:
@@ -824,6 +910,14 @@ class MainWindow:
         thread (large clouds can take seconds), then refresh the scene."""
         if self.pcd is None:
             return
+        if self._noise_pending:
+            # Estimating now would shade points that a pending noise result is
+            # about to delete, show that shading, then drop it and shade again
+            # -- a visible blink for an answer that was never going to be kept.
+            # _on_noise_result asks again once the point set has settled.
+            self._ground_deferred = True
+            return
+        self._ground_deferred = False
         self._ground_job_id += 1
         job_id = self._ground_job_id
         if not self.ground_section.enabled:
@@ -906,6 +1000,19 @@ class MainWindow:
 
 
 def run():
+    # Start the estimation process before the GUI. Spawning is cheapest while
+    # this process is still simple, and a child started afterwards would
+    # inherit whatever state Open3D's own threads are in.
+    noise_worker = NoiseWorker()
+    if not noise_worker.start():
+        print(
+            f"Noise removal will run in-process and freeze the window while it does: "
+            f"{noise_worker.failure}",
+            file=sys.stderr,
+        )
     gui.Application.instance.initialize()
-    MainWindow()
-    gui.Application.instance.run()
+    MainWindow(noise_worker)
+    try:
+        gui.Application.instance.run()
+    finally:
+        noise_worker.close()
