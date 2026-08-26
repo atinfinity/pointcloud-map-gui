@@ -103,6 +103,13 @@ So:
   top) because the cloth can drape over the object.
 - `slope_smooth` on (default) is what makes ramps work; turn it off only for
   flat floors with sharp steps.
+- Results are reproducible: `csf` is loaded with its OpenMP threads pinned to
+  one, because with them free the order they accumulate in decides which
+  points fall on either side of `class_threshold` and the same cloud gives a
+  different answer every run (a 90-point spread on `sample_ramp`). Pinning
+  costs nothing -- `csf` gets no speedup from threads. If your own code
+  imports `CSF` before this project does, the pin does not take and that
+  reproducibility is lost.
 
 ## 4. Height filter and map cleanup
 
