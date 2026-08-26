@@ -4,7 +4,7 @@ Practical notes on choosing a noise-removal / ground-removal method and
 which parameter to reach for when the result is wrong. Numbers quoted below
 were measured on the bundled `sample_data/` clouds with
 `pointcloud_map_gui.tools.compare_noise_removal` /
-`...compare_ground_removal`; re-run them on
+`...compare_ground_removal` (see [cli.md](cli.md)); re-run them on
 your own data before trusting a rule of thumb.
 
 Processing order is noise removal -> ground removal -> height filter ->
