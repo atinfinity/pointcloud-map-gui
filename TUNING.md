@@ -118,7 +118,23 @@ So:
   so a single far-away point that survives noise removal enlarges the map;
   check the `X/Y` bounds shown under the file name after loading.
 
-## 5. Quick recipes
+## 5. When the 3D view feels slow
+
+The view is capped at "Max display points" (default 1,000,000) and thins
+larger clouds by voxel subsampling. If interaction still drags:
+
+- Lower "Max display points" (e.g. 300,000). Drawing cost scales with it
+  almost linearly, and the map is unaffected -- it is always computed from
+  every point.
+- If the *map preview* is what lags behind, that is the occupancy grid being
+  recomputed over the full cloud. Coarsen the resolution while tuning, then
+  set the final value before exporting. The preview runs off the UI thread,
+  so it lags rather than blocks.
+- Noise and ground removal run over the full cloud too, and neither is
+  affected by the display limit. See `voxel_count` in section 2 for the
+  cheapest noise method on huge clouds.
+
+## 6. Quick recipes
 
 | Scene | Noise | Ground | Height |
 |---|---|---|---|

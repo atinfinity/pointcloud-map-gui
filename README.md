@@ -29,12 +29,14 @@ uv run python main.py
 
 1. Click "Load Point Cloud (.pcd/.ply)..." and select a point cloud file.
 2. The point cloud is displayed in the 3D view, with point count and XYZ
-   bounds shown in the panel.
+   bounds shown in the panel. Clouds larger than "Max display points" are
+   thinned for drawing only (see [Display thinning](#display-thinning)); the
+   panel then also reports how many points are being shown.
 3. (Optional) Enable "Remove isolated points" under Noise Removal to drop
    stray points before anything else happens (see
-   [Noise removal](#noise-removal)). Removed points are shown in translucent
-   red and are excluded from the map entirely -- they do not count as
-   scanned cells and do not enlarge the map bounds.
+   [Noise removal](#noise-removal)). Removed points are shown in faded red
+   and are excluded from the map entirely -- they do not count as scanned
+   cells and do not enlarge the map bounds.
 4. (Optional) Enable "Remove ground points" under Ground Removal to detect
    the floor even when it slopes or undulates, and pick a method from the
    dropdown (see [Ground removal](#ground-removal)). Detected ground points
@@ -42,7 +44,7 @@ uv run python main.py
 5. Adjust the height range with the Height Filter's Min/Max sliders (or the
    number fields): points within the range are colored by a height-based
    colormap (blue = low, red = high), and points outside the range are
-   rendered translucent/grayed out.
+   faded into the background.
 6. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
    preview of the resulting occupancy grid is overlaid on the top-right of
    the 3D view.
@@ -60,6 +62,28 @@ occupancy grid -> map cleanup.
 Not sure which method or parameter to change? See [TUNING.md](TUNING.md)
 for symptom -> method -> parameter guidance backed by measurements on the
 sample data.
+
+## Display thinning
+
+Drawing every point of a multi-million-point cloud costs far more than it
+shows -- the screen cannot resolve that many points anyway -- so the 3D view
+is capped at "Max display points" (default 1,000,000). Above that, points are
+voxel-subsampled for drawing: one point per voxel, which keeps a uniform
+spatial density rather than leaving sparse regions sparser the way random
+thinning would.
+
+**This only affects what is drawn.** The occupancy grid, its preview, and the
+exported map are always computed from every point, so thinning costs nothing
+in map fidelity. Raise the limit to inspect fine detail, or set it to 0 to
+disable thinning entirely.
+
+Measured on a 5,000,000-point cloud, dragging a height slider:
+
+| | Height-filter update |
+|---|---|
+| Before | 786 ms (1.3 fps) |
+| Default 1,000,000 point limit | 22 ms (45 fps) |
+| No limit (all 5M drawn) | 81 ms (12 fps) |
 
 ## Noise removal
 

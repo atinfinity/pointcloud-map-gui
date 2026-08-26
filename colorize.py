@@ -4,6 +4,39 @@ import numpy as np
 GRAY_OUT_COLOR = np.array([0.65, 0.65, 0.65])
 
 
+def _srgb_encode(linear):
+    return np.where(linear <= 0.0031308, linear * 12.92, 1.055 * np.abs(linear) ** (1 / 2.4) - 0.055)
+
+
+def _srgb_decode(encoded):
+    return np.where(encoded <= 0.04045, encoded / 12.92, ((encoded + 0.055) / 1.055) ** 2.4)
+
+
+def fade_to_background(color, alpha, background):
+    """Return the opaque color that looks like `color` drawn at `alpha` over
+    `background`.
+
+    De-emphasized points used to be a separate geometry with a translucent
+    material, which forced a full geometry rebuild whenever a point moved
+    between the emphasized and de-emphasized sets. Baking the fade into the
+    color instead lets every point live in one geometry whose colors are the
+    only thing that changes.
+
+    The blend has to happen in display space, not in the linear values the
+    shader takes, or the result comes out far too bright. Filament sRGB-encodes
+    point colors on the way out but hands the scene background through roughly
+    as given (measured: a 0.35 background renders as 81/255), so only `color`
+    gets encoded here.
+
+    One difference remains by construction: real alpha accumulates where
+    translucent points overlap, so dense de-emphasized regions used to glow
+    brighter than sparse ones. This is a single density-independent color.
+    """
+    color = np.asarray(color, dtype=np.float64)
+    background = np.asarray(background, dtype=np.float64)
+    return _srgb_decode(alpha * _srgb_encode(color) + (1.0 - alpha) * background)
+
+
 def height_colormap_colors(points):
     """Map each point to an RGB color based on its Z height, using a
     blue (low) -> red (high) hue sweep normalized over the full Z range of

@@ -8,10 +8,12 @@ import traceback
 
 import numpy as np
 import open3d as o3d
+import open3d.core as o3c
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from colorize import GRAY_OUT_COLOR, height_colormap_colors
+from colorize import GRAY_OUT_COLOR, fade_to_background, height_colormap_colors
+from display_lod import select_display_indices
 from ground_grid import build_ground_grid_lines
 import ground_removal
 import noise_removal
@@ -20,15 +22,22 @@ from map_writer import export_map
 from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
 from pointcloud_io import load_point_cloud
 
-IN_RANGE_NAME = "pointcloud_in_range"
-OUT_OF_RANGE_NAME = "pointcloud_out_of_range"
-NOISE_NAME = "pointcloud_noise"
+POINTS_NAME = "pointcloud"
 NOISE_COLOR = np.array([1.0, 0.3, 0.3])
 AXES_NAME = "coordinate_frame"
 GRID_NAME = "ground_grid"
 DEFAULT_RESOLUTION = 0.05
 DEFAULT_MIN_BLOB_CELLS = 0  # map cleanup off until the user opts in
 OUT_OF_RANGE_ALPHA = 0.15
+SCENE_BACKGROUND = np.array([0.35, 0.35, 0.35])
+# Points the user is not currently looking at are drawn faded rather than
+# translucent -- see colorize.fade_to_background for why.
+OUT_OF_RANGE_COLOR = fade_to_background(GRAY_OUT_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
+NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
+# Drawing every point of a multi-million-point cloud costs far more than it
+# shows: the view is thinned to this many points unless the user raises it.
+# The occupancy grid and the export always use the full cloud.
+DEFAULT_MAX_DISPLAY_POINTS = 1_000_000
 MAP_PREVIEW_MAX_DIM = 800
 MAP_PREVIEW_ALPHA = 128  # 0-255 (~0.5); the overlay lets the point cloud show through
 PREVIEW_SCENE_WIDTH_FRACTION = 0.2  # overlay side <= 20% of the 3D view width
@@ -123,19 +132,31 @@ class MainWindow:
         # Generation counters discard stale results from superseded worker threads.
         self._noise_job_id = 0
         self._ground_job_id = 0
+        self._preview_job_id = 0
+
+        # --- drawn subset ---
+        # Positions are uploaded once per point-set change; height-filter and
+        # ground-removal updates then rewrite colors in place and push only
+        # those, which is what keeps big clouds interactive.
+        self._display_positions = None  # (D,3) float32, active points then noise
+        self._display_colors = None  # (D,3) float32, the buffer handed to the GPU
+        self._display_base_colors = None  # (Da,3) float32 height colors, unfaded
+        self._display_zs = None  # (Da,) float32
+        self._display_active_index = None  # indices into self.points, None = all
+        self._display_active_count = 0  # Da; noise points occupy [Da:]
+
+        # Slider drags fire far faster than a rebuild can run. Callbacks only
+        # raise these, and the tick handler collapses a burst into one update.
+        self._colors_dirty = False
+        self._preview_dirty = False
 
         # --- 3D scene widget ---
         self.scene_widget = gui.SceneWidget()
         self.scene_widget.scene = rendering.Open3DScene(self.window.renderer)
-        self.scene_widget.scene.set_background([0.35, 0.35, 0.35, 1.0])
+        self.scene_widget.scene.set_background(list(SCENE_BACKGROUND) + [1.0])
         self.point_material = rendering.MaterialRecord()
         self.point_material.shader = "defaultUnlit"
         self.point_material.point_size = 2.0
-        self.out_of_range_material = rendering.MaterialRecord()
-        self.out_of_range_material.shader = "defaultLitTransparency"
-        self.out_of_range_material.point_size = 2.0
-        self.out_of_range_material.has_alpha = True
-        self.out_of_range_material.base_color = [1.0, 1.0, 1.0, OUT_OF_RANGE_ALPHA]
         self.axes_material = rendering.MaterialRecord()
         self.axes_material.shader = "defaultLit"
         self.grid_material = rendering.MaterialRecord()
@@ -157,6 +178,16 @@ class MainWindow:
 
         self.info_label = gui.Label("No point cloud loaded.")
         panel.add_child(self.info_label)
+
+        max_display_row = gui.Horiz(0.5 * em)
+        max_display_row.add_child(gui.Label("Max display points:"))
+        max_display_row.add_stretch()
+        self.max_display_edit = gui.NumberEdit(gui.NumberEdit.INT)
+        self.max_display_edit.set_limits(0, 1_000_000_000)
+        self.max_display_edit.int_value = DEFAULT_MAX_DISPLAY_POINTS
+        self.max_display_edit.set_on_value_changed(self._on_max_display_changed)
+        max_display_row.add_child(self.max_display_edit)
+        panel.add_child(max_display_row)
 
         panel.add_fixed(em)
         noise_group = gui.CollapsableVert("Noise Removal", 0.25 * em, gui.Margins(em, 0, 0, 0))
@@ -241,6 +272,7 @@ class MainWindow:
         self.window.add_child(self.preview_label)
         self.window.add_child(self.map_preview_widget)
         self.window.set_on_layout(self._on_layout)
+        self.window.set_on_tick_event(self._on_tick)
 
     # ------------------------------------------------------------------
     # Layout
@@ -362,25 +394,14 @@ class MainWindow:
     def _apply_active_points(self):
         """Refresh everything derived from the active (noise-filtered) point
         set: info text, height colors, axes/grid, scene, then ground mask."""
-        n = self.points.shape[0]
         bbox = self._active_bbox()
-        noise_line = ""
-        if self.noise_points is not None and self.noise_points.shape[0]:
-            noise_line = f" ({self.noise_points.shape[0]:,} noise removed)"
-        self.info_label.text = (
-            f"{self.loaded_name}\n"
-            f"{n:,} points{noise_line}\n"
-            f"X: [{bbox.min_bound[0]:.2f}, {bbox.max_bound[0]:.2f}]\n"
-            f"Y: [{bbox.min_bound[1]:.2f}, {bbox.max_bound[1]:.2f}]\n"
-            f"Z: [{bbox.min_bound[2]:.2f}, {bbox.max_bound[2]:.2f}]"
-        )
         # Height colors only depend on each point's Z relative to the active
         # cloud's Z range, which is fixed until the noise filter changes --
         # computing this once and slicing it per height-filter update is much
         # cheaper than recomputing the colormap on every slider tick.
         self.height_colors = height_colormap_colors(self.points)
         self.ground_mask = None
-        self._refresh_point_cloud_geometry()
+        self._rebuild_display_geometry()
         self._refresh_axes(bbox)
         self._refresh_ground_grid(bbox)
         self.window.set_needs_layout()
@@ -402,45 +423,166 @@ class MainWindow:
         self.status_label.text = f"Error loading file: {message}"
         self.window.set_needs_layout()
 
-    def _refresh_point_cloud_geometry(self):
+    def _rebuild_display_geometry(self):
+        """Re-pick the drawn subset and upload it.
+
+        Only needed when the point set itself changes (load, noise filter,
+        display budget). Height-filter and ground-removal changes go through
+        _update_display_colors, which touches colors alone.
+        """
         if self.pcd is None:
             return
-        # Points outside the height filter are rendered as a separate,
-        # translucent geometry (its own material/alpha) so they fade into
-        # the background instead of competing with the in-range points.
+        budget = self.max_display_edit.int_value
+        active_index = select_display_indices(self.points, budget)
+        active = self.points if active_index is None else self.points[active_index]
+        base = self.height_colors if active_index is None else self.height_colors[active_index]
+
+        # Noise gets its own slice of the budget rather than competing for the
+        # same one, so a mostly-noise cloud cannot crowd out the points the
+        # user is actually filtering.
+        noise_index = select_display_indices(self.noise_points, max(budget // 4, 1) if budget else 0)
+        noise = self.noise_points if noise_index is None else self.noise_points[noise_index]
+
+        self._display_active_index = active_index
+        self._display_active_count = active.shape[0]
+        self._display_positions = np.ascontiguousarray(np.vstack([active, noise]), dtype=np.float32)
+        self._display_base_colors = np.ascontiguousarray(base, dtype=np.float32)
+        self._display_zs = np.ascontiguousarray(active[:, 2], dtype=np.float32)
+        self._display_colors = np.empty_like(self._display_positions)
+        # Noise never changes color, so it is written once here and the
+        # per-tick rewrite below only ever touches the active slice.
+        self._display_colors[self._display_active_count:] = NOISE_DISPLAY_COLOR
+        self._write_display_colors()
+
+        scene = self.scene_widget.scene
+        if scene.has_geometry(POINTS_NAME):
+            scene.remove_geometry(POINTS_NAME)
+        if self._display_positions.shape[0]:
+            # No downsampled copy: this class does its own thinning, and
+            # Open3D's copy would keep whatever colors it was built with.
+            scene.add_geometry(POINTS_NAME, self._display_tensor(), self.point_material, False)
+        self._refresh_info_label()
+        self._preview_dirty = True
+
+    def _display_tensor(self):
+        """Tensor point cloud over the display buffers. Tensors created this
+        way share the numpy memory, so this is a wrapper, not a copy."""
+        tensor = o3d.t.geometry.PointCloud(o3c.Tensor.from_numpy(self._display_positions))
+        tensor.point.colors = o3c.Tensor.from_numpy(self._display_colors)
+        return tensor
+
+    def _write_display_colors(self):
+        """Fill the color buffer for the active slice: height colormap inside
+        the filter, faded everywhere else."""
+        count = self._display_active_count
+        if not count:
+            return
         min_h, max_h = self._current_height_range()
-        zs = self.points[:, 2]
-        in_range_mask = (zs >= min_h) & (zs <= max_h)
+        in_range = (self._display_zs >= min_h) & (self._display_zs <= max_h)
         if self.ground_mask is not None:
-            in_range_mask &= ~self.ground_mask
+            index = self._display_active_index
+            ground = self.ground_mask if index is None else self.ground_mask[index]
+            in_range &= ~ground
+        active = self._display_colors[:count]
+        active[:] = OUT_OF_RANGE_COLOR
+        np.copyto(active, self._display_base_colors, where=in_range[:, None])
 
-        in_pcd = o3d.geometry.PointCloud()
-        in_pcd.points = o3d.utility.Vector3dVector(self.points[in_range_mask])
-        in_pcd.colors = o3d.utility.Vector3dVector(self.height_colors[in_range_mask])
-
-        out_points = self.points[~in_range_mask]
-        out_pcd = o3d.geometry.PointCloud()
-        out_pcd.points = o3d.utility.Vector3dVector(out_points)
-        out_pcd.colors = o3d.utility.Vector3dVector(
-            np.tile(GRAY_OUT_COLOR, (out_points.shape[0], 1))
+    def _update_display_colors(self):
+        """Push new colors for an unchanged point set -- the cheap path that
+        a height-filter drag takes."""
+        if self._display_positions is None or not self._display_positions.shape[0]:
+            return
+        self._write_display_colors()
+        self.scene_widget.scene.scene.update_geometry(
+            POINTS_NAME, self._display_tensor(), rendering.Scene.UPDATE_COLORS_FLAG
         )
 
-        noise_pcd = o3d.geometry.PointCloud()
-        noise_pcd.points = o3d.utility.Vector3dVector(self.noise_points)
-        noise_pcd.colors = o3d.utility.Vector3dVector(
-            np.tile(NOISE_COLOR, (self.noise_points.shape[0], 1))
+    def _refresh_info_label(self):
+        n = self.points.shape[0]
+        noise_line = ""
+        if self.noise_points is not None and self.noise_points.shape[0]:
+            noise_line = f" ({self.noise_points.shape[0]:,} noise removed)"
+        drawn = ""
+        if self._display_active_index is not None:
+            drawn = f"\nshowing {self._display_active_count:,} (thinned for display)"
+        bbox = self._active_bbox()
+        self.info_label.text = (
+            f"{self.loaded_name}\n"
+            f"{n:,} points{noise_line}{drawn}\n"
+            f"X: [{bbox.min_bound[0]:.2f}, {bbox.max_bound[0]:.2f}]\n"
+            f"Y: [{bbox.min_bound[1]:.2f}, {bbox.max_bound[1]:.2f}]\n"
+            f"Z: [{bbox.min_bound[2]:.2f}, {bbox.max_bound[2]:.2f}]"
         )
 
-        for name, geo, material in (
-            (IN_RANGE_NAME, in_pcd, self.point_material),
-            (OUT_OF_RANGE_NAME, out_pcd, self.out_of_range_material),
-            (NOISE_NAME, noise_pcd, self.out_of_range_material),
-        ):
-            if self.scene_widget.scene.has_geometry(name):
-                self.scene_widget.scene.remove_geometry(name)
-            self.scene_widget.scene.add_geometry(name, geo, material)
+    def _on_max_display_changed(self, value):
+        if self.pcd is None:
+            return
+        self._rebuild_display_geometry()
+        self.window.set_needs_layout()
 
-        self._refresh_map_preview()
+    # ------------------------------------------------------------------
+    # Deferred updates
+    # ------------------------------------------------------------------
+    def _mark_display_dirty(self):
+        self._colors_dirty = True
+        self._preview_dirty = True
+
+    def _on_tick(self):
+        """Collapse a burst of callbacks into at most one update per frame.
+
+        A slider drag fires far faster than a rebuild can run; without this the
+        queued work would keep replaying long after the user let go.
+        """
+        if not (self._colors_dirty or self._preview_dirty):
+            return False
+        if self._colors_dirty:
+            self._colors_dirty = False
+            self._update_display_colors()
+        if self._preview_dirty:
+            self._preview_dirty = False
+            self._request_map_preview()
+        return True
+
+    def _request_map_preview(self):
+        """Rebuild the preview on a worker thread: it is a full pass over the
+        (undecimated) cloud plus a connected-component cleanup, which is too
+        slow to sit on the UI thread for large clouds."""
+        if self.pcd is None:
+            return
+        self._preview_job_id += 1
+        job_id = self._preview_job_id
+        # Widget state has to be read here -- worker threads must not touch it.
+        points = self.points
+        ground_mask = self.ground_mask
+        min_h, max_h = self._current_height_range()
+        resolution = self.resolution_edit.double_value
+        min_blob = self.min_blob_edit.int_value
+
+        def worker():
+            try:
+                result = compute_occupancy_grid(
+                    points, min_h, max_h, resolution, exclude_mask=ground_mask
+                )
+                result.grid = remove_small_occupied_blobs(result.grid, min_blob)
+                thumbnail = downsample_to_thumbnail(
+                    result.grid, MAP_PREVIEW_MAX_DIM, alpha=MAP_PREVIEW_ALPHA
+                )
+            except ValueError:
+                return  # e.g. an inverted height range; keep the last good preview
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()
+                return
+            gui.Application.instance.post_to_main_thread(
+                self.window, lambda: self._on_map_preview_ready(job_id, thumbnail)
+            )
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_map_preview_ready(self, job_id, thumbnail):
+        if job_id != self._preview_job_id:
+            return  # superseded by a newer request
+        self.map_preview_widget.update_image(o3d.geometry.Image(thumbnail))
+        self.window.set_needs_layout()
 
     def _build_occupancy_grid(self):
         """Full map pipeline on the active points: height filter + ground
@@ -454,19 +596,8 @@ class MainWindow:
         result.grid = remove_small_occupied_blobs(result.grid, self.min_blob_edit.int_value)
         return result
 
-    def _refresh_map_preview(self):
-        if self.pcd is None:
-            return
-        try:
-            result = self._build_occupancy_grid()
-        except ValueError:
-            return
-        thumbnail = downsample_to_thumbnail(result.grid, MAP_PREVIEW_MAX_DIM, alpha=MAP_PREVIEW_ALPHA)
-        self.map_preview_widget.update_image(o3d.geometry.Image(thumbnail))
-        self.window.set_needs_layout()
-
     def _on_resolution_changed(self, value):
-        self._refresh_map_preview()
+        self._preview_dirty = True
 
     def _refresh_axes(self, bbox):
         # Anchor the axes at the point cloud's XY-min corner: that is the
@@ -547,28 +678,28 @@ class MainWindow:
         if clamped != value:
             self.min_height_edit.double_value = clamped
         self.min_height_slider.double_value = clamped
-        self._refresh_point_cloud_geometry()
+        self._mark_display_dirty()
 
     def _on_max_height_edit(self, value):
         clamped = max(value, self.min_height_edit.double_value)
         if clamped != value:
             self.max_height_edit.double_value = clamped
         self.max_height_slider.double_value = clamped
-        self._refresh_point_cloud_geometry()
+        self._mark_display_dirty()
 
     def _on_min_height_slider(self, value):
         clamped = min(value, self.max_height_slider.double_value)
         if clamped != value:
             self.min_height_slider.double_value = clamped
         self.min_height_edit.double_value = clamped
-        self._refresh_point_cloud_geometry()
+        self._mark_display_dirty()
 
     def _on_max_height_slider(self, value):
         clamped = max(value, self.min_height_slider.double_value)
         if clamped != value:
             self.max_height_slider.double_value = clamped
         self.max_height_edit.double_value = clamped
-        self._refresh_point_cloud_geometry()
+        self._mark_display_dirty()
 
     def _current_height_range(self):
         return self.min_height_slider.double_value, self.max_height_slider.double_value
@@ -670,7 +801,7 @@ class MainWindow:
         if not self.ground_section.enabled:
             self.ground_mask = None
             self.ground_section.info_label.text = ""
-            self._refresh_point_cloud_geometry()
+            self._mark_display_dirty()
             return
 
         method = self.ground_section.selected_method
@@ -711,7 +842,7 @@ class MainWindow:
                 f"({100.0 * n_ground / mask.shape[0]:.1f}%) in {elapsed:.2f}s"
             )
             self.status_label.text = "Ground estimated."
-        self._refresh_point_cloud_geometry()
+        self._mark_display_dirty()
         self.window.set_needs_layout()
 
     # ------------------------------------------------------------------
