@@ -131,6 +131,7 @@ class MainWindow:
         self.all_points = None  # (M,3) every loaded point
         self.points = None  # (N,3) active points = all_points minus detected noise
         self.noise_points = None  # (M-N,3) removed noise points, for display only
+        self.noise_mask = None  # (M,) bool, None when nothing is being removed
         self.height_colors = None  # (N,3) height colormap over the active points
         self.ground_mask = None  # (N,) bool ground points, None when removal is off
         # Generation counters discard stale results from superseded worker threads.
@@ -373,6 +374,7 @@ class MainWindow:
         self.all_points = np.asarray(pcd.points).copy()
         self.points = self.all_points
         self.noise_points = np.empty((0, 3))
+        self.noise_mask = None
 
         z_min = float(self.all_points[:, 2].min())
         z_max = float(self.all_points[:, 2].max())
@@ -782,6 +784,17 @@ class MainWindow:
         self._set_noise_mask(mask)
 
     def _set_noise_mask(self, mask):
+        # A mask that removes nothing is the same state as no mask at all, and
+        # collapsing it here is what lets the comparison below spot a no-op.
+        if mask is not None and not mask.any():
+            mask = None
+        if self._noise_mask_unchanged(mask):
+            # Rebuilding the point set costs a full pass over the cloud and a
+            # re-upload -- half a second on a large one, with the GUI frozen
+            # for it. Toggling a filter that turns out to remove nothing (or
+            # turning one off that never removed anything) must not pay that.
+            return
+        self.noise_mask = mask
         if mask is None:
             self.points = self.all_points
             self.noise_points = np.empty((0, 3))
@@ -789,6 +802,11 @@ class MainWindow:
             self.points = self.all_points[~mask]
             self.noise_points = self.all_points[mask]
         self._apply_active_points()
+
+    def _noise_mask_unchanged(self, mask):
+        if self.noise_mask is None or mask is None:
+            return self.noise_mask is None and mask is None
+        return np.array_equal(self.noise_mask, mask)
 
     # ------------------------------------------------------------------
     # Ground removal
