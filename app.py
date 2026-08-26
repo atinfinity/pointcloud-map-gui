@@ -137,6 +137,11 @@ class MainWindow:
         self.points = None  # (N,3) active points = all_points minus detected noise
         self.noise_points = None  # (M-N,3) removed noise points, for display only
         self.noise_mask = None  # (M,) bool, None when nothing is being removed
+        # A noise result in flight is about to change which points exist, so
+        # ground estimation waits for it rather than producing a mask for
+        # points that are on their way out.
+        self._noise_pending = False
+        self._ground_deferred = False
         self.height_colors = None  # (N,3) height colormap over the active points
         self.ground_mask = None  # (N,) bool ground points, None when removal is off
         # Generation counters discard stale results from superseded worker threads.
@@ -401,8 +406,12 @@ class MainWindow:
 
         bbox = self.pcd.get_axis_aligned_bounding_box()
         self._set_initial_camera(bbox)
-        self._apply_active_points()
+        # Noise first: it marks a result as pending, which is what makes the
+        # ground pass inside _apply_active_points hold off. The other way round
+        # the ground mask is computed for points the noise pass is about to
+        # remove, shown, and then replaced -- which reads as a flicker.
         self._request_noise_update()
+        self._apply_active_points()
 
     def _active_bbox(self):
         return o3d.geometry.AxisAlignedBoundingBox(self.points.min(axis=0), self.points.max(axis=0))
@@ -739,9 +748,11 @@ class MainWindow:
             return
         self._noise_job_id += 1
         job_id = self._noise_job_id
+        self._noise_pending = False
         if not self.noise_section.enabled:
             self.noise_section.info_label.text = ""
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
 
         method = self.noise_section.selected_method
@@ -758,20 +769,24 @@ class MainWindow:
                 self.window, lambda: self._on_noise_result(job_id, method, mask, elapsed, error)
             )
 
+        self._noise_pending = True
         self.noise_worker.submit(points, method, params, on_done)
 
     def _on_noise_result(self, job_id, method, mask, elapsed, error):
         if job_id != self._noise_job_id:
-            return  # superseded by a newer request
+            return  # superseded by a newer request; a newer one is still pending
+        self._noise_pending = False
         if error is not None:
             self.noise_section.info_label.text = f"Noise removal failed:\n{error}"
             self.status_label.text = "Noise removal failed."
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
         if mask.all():
             self.noise_section.info_label.text = "All points classified as noise; ignoring."
             self.status_label.text = "Noise removal rejected."
             self._set_noise_mask(None)
+            self._run_deferred_ground_update()
             return
         n_noise = int(mask.sum())
         self.noise_section.info_label.text = (
@@ -780,6 +795,13 @@ class MainWindow:
         )
         self.status_label.text = "Noise removed."
         self._set_noise_mask(mask)
+        self._run_deferred_ground_update()
+
+    def _run_deferred_ground_update(self):
+        """Issue the ground pass that was held back, unless applying the noise
+        mask already rebuilt the point set and issued one itself."""
+        if self._ground_deferred:
+            self._request_ground_update()
 
     def _set_noise_mask(self, mask):
         # A mask that removes nothing is the same state as no mask at all, and
@@ -822,6 +844,14 @@ class MainWindow:
         thread (large clouds can take seconds), then refresh the scene."""
         if self.pcd is None:
             return
+        if self._noise_pending:
+            # Estimating now would shade points that a pending noise result is
+            # about to delete, show that shading, then drop it and shade again
+            # -- a visible blink for an answer that was never going to be kept.
+            # _on_noise_result asks again once the point set has settled.
+            self._ground_deferred = True
+            return
+        self._ground_deferred = False
         self._ground_job_id += 1
         job_id = self._ground_job_id
         if not self.ground_section.enabled:

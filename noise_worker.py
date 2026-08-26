@@ -44,7 +44,13 @@ def _serve(conn, repo_path):
 
     conn.send(_READY)
     while True:
-        job = conn.recv()
+        try:
+            job = conn.recv()
+        except (EOFError, OSError):
+            # The parent went away without asking us to stop -- killed, or
+            # Ctrl+C. Leave quietly instead of printing a traceback over
+            # whatever the user was actually looking at.
+            return
         if job is _SHUTDOWN:
             return
         shm_name, shape, dtype, method, params = job
