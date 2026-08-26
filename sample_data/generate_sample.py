@@ -204,6 +204,223 @@ def build_ramp_point_cloud():
     return pcd
 
 
+# --- large site ------------------------------------------------------------
+# A 50 x 50 m outdoor yard, for exercising the tool at survey scale: sparser
+# than an indoor scan but spread over 25x the area. Everything in it exists so
+# the exported map can be checked by eye -- buildings are hollow with doorways,
+# one shed was never entered, and two patches of ground sit in the occlusion
+# shadow of a building, so `free`, `occupied` and `unknown` all have to appear
+# in recognizable shapes.
+SITE_SIZE = 50.0
+SITE_FENCE_HEIGHT = 1.2
+SITE_UNDULATION = 0.05  # gentle ground relief, enough to give ground removal work
+# Ground spacing has to stay *below* the map resolution it will be gridded at.
+# A lattice of spacing s puts a point in every cell of size c only while s < c;
+# at s > c the cells it skips come out `unknown`, and the map fills with a mesh
+# of speckle that looks like a bug. 0.045 covers the 0.05 m/cell default.
+SITE_GROUND_STEP = 0.045
+SITE_STRUCTURE_STEP = 0.05
+# (x0, y0, x1, y1), wall height, and the doorway the scanner drove in through
+# as (side, start along that side, width) -- None for a building it could only
+# see from outside, whose interior therefore has to come out `unknown`.
+# No roofs: a ground-level scanner sees walls, not the tops of buildings. It
+# also matters for the map, because a roof point would mark the cells under it
+# as scanned and the sealed shed would read as free, not unknown.
+SITE_BUILDINGS = [
+    ((5.0, 5.0, 17.0, 13.0), 4.0, ("S", 4.0, 2.0)),
+    ((30.0, 28.0, 40.0, 38.0), 5.0, ("W", 4.0, 2.5)),
+    ((35.0, 8.0, 40.0, 12.0), 3.0, None),  # closed shed, never entered
+]
+# Ground the scanner never saw: shadows cast by the buildings it drove past.
+SITE_UNSCANNED = [
+    (18.0, 5.0, 26.0, 13.0),
+    (30.0, 20.0, 40.0, 26.0),
+]
+# Shipping containers: (x0, y0, x1, y1, height).
+SITE_CONTAINERS = [
+    (6.0, 30.0, 12.0, 32.4, 2.6),
+    (6.0, 34.0, 12.0, 36.4, 2.6),
+    (22.0, 42.0, 28.0, 44.4, 2.6),
+]
+
+
+def _rect_wall_segments(x0, y0, x1, y1, door):
+    """The four walls of a rectangle, with a gap left in one of them.
+
+    Without the gap the interior would be sealed off and read as unknown; the
+    doorway is what makes the room show up as scanned, hollow space.
+    """
+    side, start, width = door if door else (None, 0.0, 0.0)
+    corners = {
+        "S": ((x0, y0), (x1, y0)),
+        "E": ((x1, y0), (x1, y1)),
+        "N": ((x1, y1), (x0, y1)),
+        "W": ((x0, y1), (x0, y0)),
+    }
+    segments = []
+    for name, ((ax, ay), (bx, by)) in corners.items():
+        if side is None or name != side:
+            segments.append((ax, ay, bx, by))
+            continue
+        length = np.hypot(bx - ax, by - ay)
+        ux, uy = (bx - ax) / length, (by - ay) / length
+        segments.append((ax, ay, ax + ux * start, ay + uy * start))
+        end = start + width
+        segments.append((ax + ux * end, ay + uy * end, bx, by))
+    return segments
+
+
+def build_large_site_point_cloud():
+    """50 x 50 m yard with buildings, a fence, containers and occlusion gaps.
+
+    Density is fixed rather than solved for a point count: the ground has to be
+    sampled finer than the map resolution (see SITE_GROUND_STEP), and that
+    constraint, not a target size, is what sets it.
+
+    No colors, `.pcd` only: the GUI colors points by height, and a second copy
+    of a cloud this size is not worth the repository space.
+    """
+    step = SITE_STRUCTURE_STEP
+    size = SITE_SIZE
+
+    def floor_z(x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        # Smooth and deterministic -- a scanned yard is never dead flat, and
+        # sine relief keeps the fixture reproducible without an RNG.
+        return SITE_UNDULATION * np.sin(x / 7.0) * np.cos(y / 9.0)
+
+    gx, gy = np.meshgrid(
+        np.arange(0.0, size, SITE_GROUND_STEP), np.arange(0.0, size, SITE_GROUND_STEP)
+    )
+    gx, gy = gx.ravel(), gy.ravel()
+    keep = np.ones(gx.shape, dtype=bool)
+    holes = list(SITE_UNSCANNED)
+    holes += [footprint for footprint, _, door in SITE_BUILDINGS if door is None]
+    # Nothing sees the ground under a container, so those cells stay unknown
+    # and the container reads as the solid obstacle it is instead of a hollow
+    # outline with free space inside it.
+    holes += [(x0, y0, x1, y1) for x0, y0, x1, y1, _ in SITE_CONTAINERS]
+    for x0, y0, x1, y1 in holes:
+        keep &= ~((gx >= x0) & (gx <= x1) & (gy >= y0) & (gy <= y1))
+    parts = [np.stack([gx[keep], gy[keep], floor_z(gx[keep], gy[keep])], axis=1)]
+
+    for x0, y0, x1, y1 in [
+        (0.0, 0.0, size, 0.0),
+        (size, 0.0, size, size),
+        (size, size, 0.0, size),
+        (0.0, size, 0.0, 0.0),
+    ]:
+        parts.append(
+            _wall_on_floor(floor_z, x0, y0, x1, y1, height=SITE_FENCE_HEIGHT, step=step)
+        )
+
+    for (x0, y0, x1, y1), height, door in SITE_BUILDINGS:
+        for seg in _rect_wall_segments(x0, y0, x1, y1, door):
+            parts.append(_wall_on_floor(floor_z, *seg, height=height, step=step))
+
+    for x0, y0, x1, y1, height in SITE_CONTAINERS:
+        parts.append(_box_on_floor(floor_z, x0, y0, x1, y1, height, step=step))
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.vstack(parts))
+    return pcd
+
+
+# --- benchmark fixture -----------------------------------------------------
+# A warehouse floor plan, not a scene to look at: it exists so
+# benchmark_display.py can build a cloud of any size on demand, which is how
+# the five-million-point figures in the README are reproduced. Unlike the
+# clouds above it is not written to disk by main() -- at that size the file
+# would cost the repository more than regenerating it costs anyone.
+# Rooms are still hollow and joined by doorways, so a map exported from it can
+# be sanity-checked the same way: a solid block of "occupied" means something
+# broke.
+BENCHMARK_SIZE = 40.0
+BENCHMARK_WALL_HEIGHT = 3.0
+BENCHMARK_PILLAR_HEIGHT = 2.5
+# Interior partitions, with gaps left between segments for doorways.
+BENCHMARK_PARTITIONS = [
+    (0.0, 20.0, 16.0, 20.0),
+    (24.0, 20.0, 40.0, 20.0),
+    (20.0, 20.0, 20.0, 32.0),
+    (20.0, 36.0, 20.0, 40.0),
+    (12.0, 0.0, 12.0, 8.0),
+    (12.0, 12.0, 12.0, 20.0),
+    (28.0, 0.0, 28.0, 13.0),
+]
+BENCHMARK_PILLARS = [(7.0, 26.0), (30.0, 30.0), (20.0, 8.0)]
+BENCHMARK_PILLAR_SIDE = 1.0
+# A room the scanner never entered, seen only through its doorway: no floor
+# points fall inside it, so the map has to come out `unknown` there rather than
+# `free`. Without it every cell in the grid is scanned and the fixture cannot
+# tell the two apart.
+BENCHMARK_UNSCANNED = (28.0, 0.0, 40.0, 13.0)
+
+
+def _benchmark_step(n_points):
+    """Sample spacing that lands the scene near `n_points`.
+
+    Every surface below is sampled on a fixed grid, so the point count is the
+    total area over step**2 -- solve that for the step rather than building the
+    scene repeatedly to search for it.
+    """
+    outer = 4.0 * BENCHMARK_SIZE * BENCHMARK_WALL_HEIGHT
+    partitions = sum(
+        np.hypot(x1 - x0, y1 - y0) for x0, y0, x1, y1 in BENCHMARK_PARTITIONS
+    ) * BENCHMARK_WALL_HEIGHT
+    pillar = BENCHMARK_PILLAR_SIDE * (
+        BENCHMARK_PILLAR_SIDE + 4.0 * BENCHMARK_PILLAR_HEIGHT
+    )
+    ux0, uy0, ux1, uy1 = BENCHMARK_UNSCANNED
+    floor = BENCHMARK_SIZE**2 - (ux1 - ux0) * (uy1 - uy0)
+    area = floor + outer + partitions + len(BENCHMARK_PILLARS) * pillar
+    return float(np.sqrt(area / n_points))
+
+
+def build_benchmark_point_cloud(n_points=2_000_000):
+    """Large warehouse-like cloud for benchmarking the 3D view.
+
+    No colors: the GUI colors points by height and ignores any the file
+    carries, and dropping them keeps the committed file a third smaller.
+    """
+    step = _benchmark_step(n_points)
+    size = BENCHMARK_SIZE
+
+    def floor_z(x, y):
+        return np.zeros_like(np.asarray(x, dtype=float))
+
+    fx, fy = np.meshgrid(np.arange(0.0, size, step), np.arange(0.0, size, step))
+    fx, fy = fx.ravel(), fy.ravel()
+    ux0, uy0, ux1, uy1 = BENCHMARK_UNSCANNED
+    scanned = ~((fx >= ux0) & (fx <= ux1) & (fy >= uy0) & (fy <= uy1))
+    parts = [np.stack([fx[scanned], fy[scanned], np.zeros(int(scanned.sum()))], axis=1)]
+
+    outer = [
+        (0.0, 0.0, size, 0.0),
+        (size, 0.0, size, size),
+        (size, size, 0.0, size),
+        (0.0, size, 0.0, 0.0),
+    ]
+    for x0, y0, x1, y1 in outer + BENCHMARK_PARTITIONS:
+        parts.append(
+            _wall_on_floor(floor_z, x0, y0, x1, y1, height=BENCHMARK_WALL_HEIGHT, step=step)
+        )
+
+    half = BENCHMARK_PILLAR_SIDE / 2.0
+    for cx, cy in BENCHMARK_PILLARS:
+        parts.append(
+            _box_on_floor(
+                floor_z, cx - half, cy - half, cx + half, cy + half,
+                BENCHMARK_PILLAR_HEIGHT, step=step,
+            )
+        )
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.vstack(parts))
+    return pcd
+
+
 def main():
     for name, builder in (
         ("sample_room", build_room_point_cloud),
@@ -217,6 +434,13 @@ def main():
         o3d.io.write_point_cloud(pcd_path, pcd)
         o3d.io.write_point_cloud(ply_path, pcd)
         print(f"Wrote {len(pcd.points)} points to:\n  {pcd_path}\n  {ply_path}")
+
+    # .pcd only: a .ply of a cloud this size would be tens of MB more in the
+    # repository for a file nothing reads.
+    pcd = build_large_site_point_cloud()
+    pcd_path = os.path.join(OUT_DIR, "sample_large_site.pcd")
+    o3d.io.write_point_cloud(pcd_path, pcd)
+    print(f"Wrote {len(pcd.points)} points to:\n  {pcd_path}")
 
 
 if __name__ == "__main__":
