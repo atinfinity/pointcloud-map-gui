@@ -1,6 +1,7 @@
 """Run every ground-removal method on one point cloud and compare them.
 
-    uv run python compare_ground_removal.py input.pcd --out-dir out/ \\
+    uv run python -m pointcloud_map_gui.tools.compare_ground_removal \\
+        input.pcd --out-dir out/ \\
         [--methods local_grid pmf csf] [--param pmf.slope=0.5 ...] \\
         [--min-height 0.1 --max-height 1.5 --resolution 0.05] [--min-blob-cells 3]
 
@@ -43,13 +44,31 @@ def iou(a, b):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("input")
-    parser.add_argument("--out-dir", default="ground_removal_out")
-    parser.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
-    parser.add_argument("--param", action="append", metavar="METHOD.NAME=VALUE")
-    parser.add_argument("--min-height", type=float, default=None)
-    parser.add_argument("--max-height", type=float, default=None)
-    parser.add_argument("--resolution", type=float, default=0.05)
+    parser.add_argument("input", help="point cloud to run every method on (.pcd/.ply)")
+    parser.add_argument(
+        "--out-dir", default="ground_removal_out",
+        help="directory for the per-method .ply and map files (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--methods", nargs="+", default=list(METHODS), choices=list(METHODS),
+        help="which methods to run (default: all of them)",
+    )
+    parser.add_argument(
+        "--param", action="append", metavar="METHOD.NAME=VALUE",
+        help="override one parameter, e.g. pmf.slope=0.5; repeatable",
+    )
+    parser.add_argument(
+        "--min-height", type=float, default=None,
+        help="bottom of the height filter in metres (default: the cloud's own minimum)",
+    )
+    parser.add_argument(
+        "--max-height", type=float, default=None,
+        help="top of the height filter in metres (default: the cloud's own maximum)",
+    )
+    parser.add_argument(
+        "--resolution", type=float, default=0.05,
+        help="occupancy grid resolution in metres per cell (default: %(default)s)",
+    )
     parser.add_argument("--min-blob-cells", type=int, default=0, help="map cleanup: drop occupied blobs smaller than this")
     args = parser.parse_args(argv)
 

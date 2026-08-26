@@ -11,11 +11,12 @@ It does not depend on ROS 2 itself and runs as a standalone Python application.
 
 ## Documentation
 
-| | |
+| Document | What it covers |
 |---|---|
 | [Algorithms](docs/algorithms.md) | What noise removal, ground removal and the occupancy grid actually do, and which method to pick |
 | [Display thinning](docs/display.md) | How the 3D view stays responsive on multi-million-point clouds |
 | [Sample data](docs/sample-data.md) | The bundled clouds and what each one is for |
+| [Command-line tools](docs/cli.md) | The comparison, benchmark and sample-generation tools, and their options |
 | [TUNING.md](docs/TUNING.md) | Symptom -> method -> parameter, backed by measurements |
 
 ## Layout
@@ -30,11 +31,25 @@ tests/                      headless tests of the GUI-independent logic
 
 ## Setup
 
-Requires Python 3.10-3.12. Open3D 0.19.0 (its latest release) publishes wheels
-only up to CPython 3.12 and ships no sdist, so 3.13+ cannot install it.
-Dependencies are managed with [uv](https://docs.astral.sh/uv/), which reads the
-pinned version from `.python-version` and downloads it automatically -- so this
-works even if your system Python is newer.
+### Requirements
+
+- **[uv](https://docs.astral.sh/uv/) must be installed first.** It is what
+  manages the dependencies and the Python version; there is no `pip install`
+  path. See [the install instructions](https://docs.astral.sh/uv/getting-started/installation/),
+  or on Linux and macOS:
+
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
+
+- **Python 3.10, 3.11 or 3.12.** Not 3.13 or newer: Open3D 0.19.0 is its latest
+  release and publishes wheels only up to CPython 3.12, with no sdist to build
+  from, so newer versions cannot install it. You do not have to install a
+  matching Python yourself -- uv reads the pinned version from
+  `.python-version` and downloads it, so this works even when your system
+  Python is newer.
+
+### Install
 
 ```bash
 uv sync

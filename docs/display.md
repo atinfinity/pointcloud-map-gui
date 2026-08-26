@@ -20,9 +20,9 @@ height slider:
 
 | Max display points | Points drawn | Height-filter update |
 |---|---:|---:|
-| 500,000 | 474,242 | 7.0 ms (144 fps) |
-| 1,000,000 (default) | 491,181 | 7.1 ms (142 fps) |
-| 0 (no limit) | 1,554,944 | 21.1 ms (47 fps) |
+| 500,000 | 474,242 | 5.4 ms (185 fps) |
+| 1,000,000 (default) | 491,181 | 5.3 ms (189 fps) |
+| 0 (no limit) | 1,554,944 | 15.5 ms (64 fps) |
 
 Before the geometry was made updatable in place, the same drag cost 163 ms per
 tick (6.1 fps) on that cloud, and 786 ms (1.3 fps) on a five-million-point one.
@@ -37,6 +37,8 @@ Reproduce with:
 uv run python -m pointcloud_map_gui.tools.benchmark_display                              # the committed cloud
 uv run python -m pointcloud_map_gui.tools.benchmark_display --generate --points 5000000  # a generated one
 ```
+
+See [cli.md](cli.md#benchmark_display) for the rest of its options.
 
 Check out the commit before this change and run the same script to get the
 "before" column; it detects which version of the code it is on.
