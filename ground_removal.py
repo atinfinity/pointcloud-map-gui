@@ -10,11 +10,15 @@ Three interchangeable methods, all sharing the signature
   DEM with a growing opening window and a slope-aware height threshold.
   Pure numpy.
 - ``csf``: Cloth Simulation Filter (Zhang et al. 2016) via the
-  ``cloth-simulation-filter`` package.
+  ``cloth-simulation-filter`` package. Loaded through ``_import_csf`` so that
+  it runs single-threaded and returns the same answer twice.
 
 The DEM helpers are pure numpy (no scipy) so this module stays testable
 headless alongside occupancy_grid.py.
 """
+import os
+import threading
+
 import numpy as np
 
 # Parameter metadata shared by the GUI and the CLI: name -> (default, min, max).
@@ -212,6 +216,45 @@ def ground_mask_pmf(
 # ----------------------------------------------------------------------
 # Method D: cloth simulation filter
 # ----------------------------------------------------------------------
+_csf_import_lock = threading.Lock()
+
+
+def _import_csf():
+    """Import the CSF extension with OpenMP pinned to a single thread.
+
+    Left to itself, CSF returns a different answer every run: the order its
+    OpenMP threads accumulate in decides which points land on either side of
+    `class_threshold`. Measured on sample_ramp.ply over ten runs, the ground
+    count spanned 90 points, and the 106 points that ever changed their mind
+    were all within the threshold of the cloth -- genuinely borderline, but it
+    means a comparison run twice does not agree with itself.
+
+    Pinning costs nothing: CSF gets no speedup from threads at all (0.261 s on
+    one against 0.263 s on eight, over 1.5M points). It has to be done before
+    the library loads, though -- afterwards the setting is ignored, and
+    omp_set_num_threads through libgomp does not reach it either. The
+    environment goes back immediately, so everything that does scale keeps its
+    threads: the Open3D noise methods lose up to 2.7x without them.
+
+    Only the first call does anything; by the second the runtime is up.
+    """
+    with _csf_import_lock:
+        previous = os.environ.get("OMP_NUM_THREADS")
+        os.environ["OMP_NUM_THREADS"] = "1"
+        try:
+            import CSF
+        except ImportError as e:  # pragma: no cover - depends on environment
+            raise ImportError(
+                "CSF method requires the 'cloth-simulation-filter' package (uv sync)"
+            ) from e
+        finally:
+            if previous is None:
+                os.environ.pop("OMP_NUM_THREADS", None)
+            else:
+                os.environ["OMP_NUM_THREADS"] = previous
+    return CSF
+
+
 def ground_mask_csf(
     points,
     cloth_resolution=0.5,
@@ -226,12 +269,7 @@ def ground_mask_csf(
         raise ValueError("rigidness must be 1, 2 or 3")
     if class_threshold < 0:
         raise ValueError("class_threshold must be >= 0")
-    try:
-        import CSF
-    except ImportError as e:  # pragma: no cover - depends on environment
-        raise ImportError(
-            "CSF method requires the 'cloth-simulation-filter' package (uv sync)"
-        ) from e
+    CSF = _import_csf()
 
     csf = CSF.CSF()
     csf.params.bSloopSmooth = bool(slope_smooth)

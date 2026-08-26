@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import sys
 
@@ -22,9 +23,21 @@ def _method_ids():
     return list(METHODS.keys())
 
 
+def _skip_without_csf():
+    """Skip if the CSF extension is missing -- without importing it.
+
+    pytest.importorskip would load it here, ahead of ground_removal._import_csf,
+    and the single-thread pin that makes CSF reproducible only takes on the
+    first load. Importing it from a test would quietly cost the whole session
+    that guarantee.
+    """
+    if importlib.util.find_spec("CSF") is None:
+        pytest.skip("cloth-simulation-filter is not installed")
+
+
 def _run(method, points, **overrides):
     if method == "csf":
-        pytest.importorskip("CSF")
+        _skip_without_csf()
     params = default_params(method)
     params.update(overrides)
     return estimate_ground_mask(points, method, **params)
@@ -85,7 +98,7 @@ def test_cloud_with_empty_regions_does_not_raise(method):
 @pytest.mark.parametrize("method", _method_ids())
 def test_invalid_inputs_raise(method):
     if method == "csf":
-        pytest.importorskip("CSF")
+        _skip_without_csf()
     with pytest.raises(ValueError):
         estimate_ground_mask(np.empty((0, 3)), method, **default_params(method))
     first_param = next(iter(DEFAULT_PARAMS[method]))
@@ -137,3 +150,32 @@ def test_bilinear_sample_interpolates_between_cell_centres():
     # Cell centres at x=0.5 and x=1.5 -> midpoint x=1.0 gives 0.5.
     z = _bilinear_sample(dem, np.array([[0.5, 0.5], [1.0, 0.5], [1.5, 0.5], [9.0, 0.5]]), origin, 1.0)
     np.testing.assert_allclose(z, [0.0, 0.5, 1.0, 1.0])
+
+
+def test_csf_import_leaves_the_environment_alone():
+    """CSF is pinned to one thread only for its own load. Leaving the variable
+    set would follow every child process and cost the noise methods, which do
+    scale with threads, up to 2.7x."""
+    import ground_removal as gr
+
+    before = os.environ.get("OMP_NUM_THREADS")
+    gr._import_csf()
+    assert os.environ.get("OMP_NUM_THREADS") == before
+
+
+def test_csf_returns_the_same_answer_every_time():
+    """Without the pin the ground count wandered over a 90-point range on this
+    cloud, all of it points sitting within class_threshold of the cloth."""
+    _skip_without_csf()
+    path = os.path.join(os.path.dirname(__file__), "..", "sample_data", "sample_ramp.ply")
+    if not os.path.exists(path):
+        pytest.skip("sample_ramp.ply has not been generated")
+    import open3d as o3d
+
+    import ground_removal as gr
+
+    points = np.asarray(o3d.io.read_point_cloud(path).points)
+    params = gr.default_params("csf")
+    first = gr.estimate_ground_mask(points, "csf", **params)
+    for _ in range(5):
+        assert np.array_equal(gr.estimate_ground_mask(points, "csf", **params), first)
