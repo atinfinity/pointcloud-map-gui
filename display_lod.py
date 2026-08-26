@@ -14,7 +14,10 @@ import numpy as np
 # Stop once a pass lands within this fraction of the budget. Chasing the last
 # few percent costs another full pass over the cloud and buys nothing visible.
 _TOLERANCE = 0.85
-_MAX_PASSES = 4
+_MAX_PASSES = 5
+# Thinning a cloud that only just exceeds the budget costs a search and a copy
+# to remove a rounding error's worth of points. Draw it as it is.
+_SLACK = 1.05
 # Aim slightly under budget when correcting downward, so a pass that lands a
 # fraction of a percent over does not need several more to inch below.
 _SAFETY = 0.95
@@ -71,6 +74,25 @@ def _widen_to_cell_budget(voxel_size, extent, dims):
     return voxel_size
 
 
+def _count_exponent(previous, voxel_size, kept, n_dims):
+    """How fast the kept-point count falls as the voxel grows.
+
+    The count goes as voxel_size**-p. Assuming p is the dimension count only
+    holds for solid clouds; real scans are surfaces sitting in a 3D box, where
+    p is nearer 2 and the assumption leaves the budget badly underfilled. Once
+    two passes exist, measure p from them instead of assuming it.
+    """
+    if previous is None:
+        return n_dims
+    last_size, last_kept = previous
+    if last_kept < 1 or kept < 1 or abs(np.log(voxel_size / last_size)) < 1e-6:
+        return n_dims
+    measured = -np.log(kept / last_kept) / np.log(voxel_size / last_size)
+    # Nonsense slopes come from passes that hit the cell cap rather than from
+    # the geometry, so keep it inside what a 1D-to-3D structure can produce.
+    return float(np.clip(measured, 1.0, 3.0))
+
+
 def select_display_indices(points, max_points):
     """Return indices of at most `max_points` points, spread evenly in space,
     or None when the whole cloud already fits (draw it as-is).
@@ -80,7 +102,7 @@ def select_display_indices(points, max_points):
     the way random thinning does.
     """
     n = points.shape[0]
-    if max_points <= 0 or n <= max_points:
+    if max_points <= 0 or n <= max_points * _SLACK:
         return None
 
     origin = points.min(axis=0)
@@ -94,6 +116,7 @@ def select_display_indices(points, max_points):
     # below mostly refines downward from here -- usually once.
     voxel_size = float((dims.prod() / max_points) ** (1.0 / dims.size))
     best = None
+    previous = None  # (voxel_size, kept) of the pass before, for the exponent
     for _ in range(_MAX_PASSES):
         voxel_size = _widen_to_cell_budget(voxel_size, extent, dims)
         index = _voxel_representatives(points, origin, extent, voxel_size)
@@ -103,11 +126,12 @@ def select_display_indices(points, max_points):
                 best = index
             if kept >= _TOLERANCE * max_points:
                 break
-        # Occupied-cell count moves with voxel_size**-dims.size, so this
-        # converges from either side; the floor stops a near-empty pass from
-        # collapsing the voxel size in one step.
         target = max_points if kept <= max_points else _SAFETY * max_points
-        adjusted = voxel_size * max((kept / target) ** (1.0 / dims.size), 0.5)
+        exponent = _count_exponent(previous, voxel_size, kept, dims.size)
+        previous = (voxel_size, kept)
+        # The floor stops a near-empty pass from collapsing the voxel size in
+        # one step, which would blow the cell budget and get widened right back.
+        adjusted = voxel_size * max((kept / target) ** (1.0 / exponent), 0.5)
         if abs(adjusted - voxel_size) < 1e-4 * voxel_size:
             break  # the cell cap is pinning the voxel size; more passes cannot help
         voxel_size = adjusted

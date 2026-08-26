@@ -77,13 +77,31 @@ exported map are always computed from every point, so thinning costs nothing
 in map fidelity. Raise the limit to inspect fine detail, or set it to 0 to
 disable thinning entirely.
 
-Measured on a 5,000,000-point cloud, dragging a height slider:
+Measured on `sample_data/sample_large_site.pcd` (1,554,944 points), dragging a
+height slider:
 
-| | Height-filter update |
-|---|---|
-| Before | 786 ms (1.3 fps) |
-| Default 1,000,000 point limit | 22 ms (45 fps) |
-| No limit (all 5M drawn) | 81 ms (12 fps) |
+| Max display points | Points drawn | Height-filter update |
+|---|---:|---:|
+| 500,000 | 474,242 | 7.0 ms (144 fps) |
+| 1,000,000 (default) | 491,181 | 7.1 ms (142 fps) |
+| 0 (no limit) | 1,554,944 | 21.1 ms (47 fps) |
+
+Before the geometry was made updatable in place, the same drag cost 163 ms per
+tick (6.1 fps) on that cloud, and 786 ms (1.3 fps) on a five-million-point one.
+
+Fewer points are drawn than the limit allows because the voxel grid only
+divides so finely before its lookup table would outgrow the memory budget; the
+panel always reports the count actually being drawn.
+
+Reproduce with:
+
+```bash
+uv run python benchmark_display.py                              # the committed cloud
+uv run python benchmark_display.py --generate --points 5000000  # a generated one
+```
+
+Check out the commit before this change and run the same script to get the
+"before" column; it detects which version of the code it is on.
 
 ## Noise removal
 
@@ -163,7 +181,10 @@ comparison.
 uv run python sample_data/generate_sample.py
 ```
 
-Generates four synthetic point clouds in `sample_data/`:
+Generates five synthetic point clouds in `sample_data/`. The first four are
+small scenes for exercising one feature at a time, written as both `.pcd` and
+`.ply`; the last is large and written as `.pcd` only, without colors (the GUI
+colors points by height and ignores any the file carries).
 
 - `sample_room`: a flat floor, walls, and a floating obstacle (height
   1.0-1.8m), useful for exercising the height filter.
@@ -179,6 +200,22 @@ Generates four synthetic point clouds in `sample_data/`:
   each level and one on the ramp, plus a floating obstacle. The lower box's
   top is below the upper floor, and the flat/slope breaklines are where
   DEM-based ground removal is most likely to misclassify.
+- `sample_large_site`: a 50 x 50 m outdoor yard at 1,554,944 points -- survey
+  scale, sparser than an indoor scan but spread over 25x the area. A perimeter
+  fence, three buildings, three shipping containers and gently undulating
+  ground (+/-0.05m, enough to give ground removal something to do). Everything
+  in it is there so the map can be checked by eye: two buildings were entered
+  through their doorways and come out hollow and `free`; the third was only
+  seen from outside and comes out `unknown` inside its `occupied` walls; two
+  patches of ground sit in a building's occlusion shadow, and nothing sees the
+  ground under a container, so those come out `unknown` too. Its ground is
+  sampled at 0.045 m, just under the 0.05 m/cell default resolution -- coarser
+  than the grid and the map fills with `unknown` speckle.
+
+`benchmark_display.py --generate --points N` builds a sixth, a warehouse floor
+plan of any size, without writing it to disk; `--write PATH` saves one. It is
+what the five-million-point figures above come from, and is not committed
+because at that size the file is 60 MB.
 
 ## Tests
 
