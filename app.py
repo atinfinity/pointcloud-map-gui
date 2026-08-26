@@ -57,6 +57,34 @@ GROUND_METHODS = list(ground_removal.DEFAULT_PARAMS)  # combobox order
 NOISE_METHODS = list(noise_removal.DEFAULT_PARAMS)
 
 
+def reindex_ground_mask(ground_mask, previous_removed, new_removed, total):
+    """Move a ground classification onto a point set with different points
+    removed from it, or None if it cannot be carried over.
+
+    Changing the noise filter only adds or removes points; every point that
+    survives keeps whatever it was classified as. Dropping the classification
+    instead leaves the ground drawn in full colour until a fresh estimate
+    arrives -- measured at ~75 ms, which on a cloud that is 40% floor is a
+    visible flash. Points that reappear come back unclassified, until the
+    estimate this is accompanied by refines them.
+
+    `previous_removed` and `new_removed` are noise masks over all `total`
+    points, or None for "nothing removed". `ground_mask` is over whatever
+    survived `previous_removed`.
+    """
+    if ground_mask is None:
+        return None
+    expected = total if previous_removed is None else int((~previous_removed).sum())
+    if ground_mask.shape[0] != expected:
+        return None  # stale, and mis-indexing it would be worse than starting over
+    if previous_removed is None:
+        lifted = ground_mask
+    else:
+        lifted = np.zeros(total, dtype=bool)
+        lifted[~previous_removed] = ground_mask
+    return lifted if new_removed is None else lifted[~new_removed]
+
+
 class MethodSection:
     """Checkbox + method combobox + one parameter block per method (only the
     selected block is visible) + result label. Shared by noise and ground
@@ -425,16 +453,21 @@ class MainWindow:
     def _active_bbox(self):
         return o3d.geometry.AxisAlignedBoundingBox(self.points.min(axis=0), self.points.max(axis=0))
 
-    def _apply_active_points(self):
+    def _apply_active_points(self, ground_mask=None):
         """Refresh everything derived from the active (noise-filtered) point
-        set: info text, height colors, axes/grid, scene, then ground mask."""
+        set: info text, height colors, axes/grid, scene, then ground mask.
+
+        `ground_mask` is the classification carried over from the previous
+        point set where one could be, so the ground keeps its tint until the
+        fresh estimate lands instead of flashing back to full colour.
+        """
         bbox = self._active_bbox()
         # Height colors only depend on each point's Z relative to the active
         # cloud's Z range, which is fixed until the noise filter changes --
         # computing this once and slicing it per height-filter update is much
         # cheaper than recomputing the colormap on every slider tick.
         self.height_colors = height_colormap_colors(self.points)
-        self.ground_mask = None
+        self.ground_mask = ground_mask
         self._rebuild_display_geometry()
         self._refresh_axes(bbox)
         self._refresh_ground_grid(bbox)
@@ -840,6 +873,13 @@ class MainWindow:
             # for it. Toggling a filter that turns out to remove nothing (or
             # turning one off that never removed anything) must not pay that.
             return
+        carried = (
+            None
+            if self.all_points is None
+            else reindex_ground_mask(
+                self.ground_mask, self.noise_mask, mask, self.all_points.shape[0]
+            )
+        )
         self.noise_mask = mask
         if mask is None:
             self.points = self.all_points
@@ -847,7 +887,7 @@ class MainWindow:
         else:
             self.points = self.all_points[~mask]
             self.noise_points = self.all_points[mask]
-        self._apply_active_points()
+        self._apply_active_points(carried)
 
     def _noise_mask_unchanged(self, mask):
         if self.noise_mask is None or mask is None:
