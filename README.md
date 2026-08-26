@@ -40,11 +40,14 @@ uv run python main.py
 4. (Optional) Enable "Remove ground points" under Ground Removal to detect
    the floor even when it slopes or undulates, and pick a method from the
    dropdown (see [Ground removal](#ground-removal)). Detected ground points
-   are grayed out in the 3D view and never become `occupied` in the map.
+   are tinted a faded blue in the 3D view -- still there, still counted as
+   scanned ground, but never `occupied` in the map. They are the only points
+   drawn de-emphasised, so that tint always means "classified as ground"
+   rather than "outside the height filter".
 5. Adjust the height range with the Height Filter's Min/Max sliders (or the
    number fields): points within the range are colored by a height-based
    colormap (blue = low, red = high), and points outside the range are
-   faded into the background.
+   hidden, so nothing you have excluded hides what you have kept.
 6. Set the output resolution with Occupancy Grid Resolution (m/cell). A live
    preview of the resulting occupancy grid is overlaid on the top-right of
    the 3D view.

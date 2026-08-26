@@ -13,7 +13,7 @@ import open3d.core as o3c
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from colorize import GRAY_OUT_COLOR, fade_to_background, height_colormap_colors
+from colorize import fade_to_background, height_colormap_colors
 from display_lod import select_display_indices
 from ground_grid import build_ground_grid_lines
 import ground_removal
@@ -30,12 +30,17 @@ AXES_NAME = "coordinate_frame"
 GRID_NAME = "ground_grid"
 DEFAULT_RESOLUTION = 0.05
 DEFAULT_MIN_BLOB_CELLS = 0  # map cleanup off until the user opts in
-OUT_OF_RANGE_ALPHA = 0.15
 SCENE_BACKGROUND = np.array([0.35, 0.35, 0.35])
-# Points the user is not currently looking at are drawn faded rather than
-# translucent -- see colorize.fade_to_background for why.
-OUT_OF_RANGE_COLOR = fade_to_background(GRAY_OUT_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
-NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, OUT_OF_RANGE_ALPHA, SCENE_BACKGROUND)
+# De-emphasised points are drawn faded rather than translucent -- see
+# colorize.fade_to_background for why.
+NOISE_ALPHA = 0.15
+# Ground sits a little stronger than that, and in its own hue: it is now the
+# only category still drawn de-emphasised, and a neutral grey that faint reads
+# as "those points were deleted" rather than "those points are the floor".
+GROUND_ALPHA = 0.30
+GROUND_TINT = np.array([0.35, 0.65, 1.0])
+GROUND_COLOR = fade_to_background(GROUND_TINT, GROUND_ALPHA, SCENE_BACKGROUND)
+NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, NOISE_ALPHA, SCENE_BACKGROUND)
 # Drawing every point of a multi-million-point cloud costs far more than it
 # shows: the view is thinned to this many points unless the user raises it.
 # The occupancy grid and the export always use the full cloud.
@@ -154,6 +159,10 @@ class MainWindow:
         # ground-removal updates then rewrite colors in place and push only
         # those, which is what keeps big clouds interactive.
         self._display_positions = None  # (D,3) float32, active points then noise
+        # What is actually uploaded. Points outside the height filter get NaN
+        # coordinates here, which the renderer culls -- the only way to hide a
+        # point without splitting the geometry, which is what made this slow.
+        self._display_draw_positions = None
         self._display_colors = None  # (D,3) float32, the buffer handed to the GPU
         self._display_base_colors = None  # (Da,3) float32 height colors, unfaded
         self._display_zs = None  # (Da,) float32
@@ -453,7 +462,8 @@ class MainWindow:
 
         Only needed when the point set itself changes (load, noise filter,
         display budget). Height-filter and ground-removal changes go through
-        _update_display_colors, which touches colors alone.
+        _update_display_buffers, which rewrites what is drawn without
+        rebuilding it.
         """
         if self.pcd is None:
             return
@@ -473,11 +483,13 @@ class MainWindow:
         self._display_positions = np.ascontiguousarray(np.vstack([active, noise]), dtype=np.float32)
         self._display_base_colors = np.ascontiguousarray(base, dtype=np.float32)
         self._display_zs = np.ascontiguousarray(active[:, 2], dtype=np.float32)
+        self._display_draw_positions = self._display_positions.copy()
         self._display_colors = np.empty_like(self._display_positions)
-        # Noise never changes color, so it is written once here and the
-        # per-tick rewrite below only ever touches the active slice.
+        # Noise never changes color and is never hidden by the height filter,
+        # so both of its buffers are written once here and the per-tick rewrite
+        # below only ever touches the active slice.
         self._display_colors[self._display_active_count:] = NOISE_DISPLAY_COLOR
-        self._write_display_colors()
+        self._write_display_buffers()
 
         scene = self.scene_widget.scene
         if scene.has_geometry(POINTS_NAME):
@@ -492,34 +504,48 @@ class MainWindow:
     def _display_tensor(self):
         """Tensor point cloud over the display buffers. Tensors created this
         way share the numpy memory, so this is a wrapper, not a copy."""
-        tensor = o3d.t.geometry.PointCloud(o3c.Tensor.from_numpy(self._display_positions))
+        tensor = o3d.t.geometry.PointCloud(o3c.Tensor.from_numpy(self._display_draw_positions))
         tensor.point.colors = o3c.Tensor.from_numpy(self._display_colors)
         return tensor
 
-    def _write_display_colors(self):
-        """Fill the color buffer for the active slice: height colormap inside
-        the filter, faded everywhere else."""
+    def _write_display_buffers(self):
+        """Fill the drawn colors and positions for the active slice.
+
+        Three outcomes per point: inside the height filter and not ground, so
+        drawn in the height colormap; ground, so drawn in its own faded tint
+        whatever the filter says; or outside the filter, so not drawn at all.
+        Hiding is done by writing NaN coordinates rather than by leaving the
+        point out, which would mean rebuilding the geometry on every tick.
+        """
         count = self._display_active_count
         if not count:
             return
         min_h, max_h = self._current_height_range()
-        in_range = (self._display_zs >= min_h) & (self._display_zs <= max_h)
+        visible = (self._display_zs >= min_h) & (self._display_zs <= max_h)
+
+        colors = self._display_colors[:count]
+        np.copyto(colors, self._display_base_colors)
         if self.ground_mask is not None:
             index = self._display_active_index
             ground = self.ground_mask if index is None else self.ground_mask[index]
-            in_range &= ~ground
-        active = self._display_colors[:count]
-        active[:] = OUT_OF_RANGE_COLOR
-        np.copyto(active, self._display_base_colors, where=in_range[:, None])
+            np.copyto(colors, GROUND_COLOR.astype(np.float32), where=ground[:, None])
+            visible |= ground
 
-    def _update_display_colors(self):
-        """Push new colors for an unchanged point set -- the cheap path that
-        a height-filter drag takes."""
+        positions = self._display_draw_positions[:count]
+        np.copyto(positions, self._display_positions[:count])
+        np.copyto(positions, np.float32("nan"), where=~visible[:, None])
+
+    def _update_display_buffers(self):
+        """Push new colors and positions for an unchanged point set -- the
+        cheap path that a height-filter drag takes. Sending positions as well
+        as colors measured free: both are one buffer of the same size."""
         if self._display_positions is None or not self._display_positions.shape[0]:
             return
-        self._write_display_colors()
+        self._write_display_buffers()
         self.scene_widget.scene.scene.update_geometry(
-            POINTS_NAME, self._display_tensor(), rendering.Scene.UPDATE_COLORS_FLAG
+            POINTS_NAME,
+            self._display_tensor(),
+            rendering.Scene.UPDATE_COLORS_FLAG | rendering.Scene.UPDATE_POINTS_FLAG,
         )
 
     def _refresh_info_label(self):
@@ -562,7 +588,7 @@ class MainWindow:
             return False
         if self._colors_dirty:
             self._colors_dirty = False
-            self._update_display_colors()
+            self._update_display_buffers()
         if self._preview_dirty:
             self._preview_dirty = False
             self._request_map_preview()
