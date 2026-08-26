@@ -5,7 +5,17 @@ height range and resolution in an Open3D GUI, and exports a ROS 2
 (`map_server` / `nav2_map_server`) compatible occupancy grid map (PGM + YAML).
 It does not depend on ROS 2 itself and runs as a standalone Python application.
 
-![Demo](demo.gif)
+![Demo](docs/demo.gif)
+
+## Layout
+
+```
+src/pointcloud_map_gui/     the application and its modules
+    tools/                  command-line tools, run with python -m
+docs/                       TUNING.md and images
+sample_data/                generated sample clouds (.pcd/.ply)
+tests/                      headless tests of the GUI-independent logic
+```
 
 ## Setup
 
@@ -22,7 +32,7 @@ uv sync
 ## Run
 
 ```bash
-uv run python main.py
+uv run pointcloud-map-gui
 ```
 
 ## Usage
@@ -62,7 +72,7 @@ uv run python main.py
 Processing order: noise removal -> ground removal -> height filter ->
 occupancy grid -> map cleanup.
 
-Not sure which method or parameter to change? See [TUNING.md](TUNING.md)
+Not sure which method or parameter to change? See [TUNING.md](docs/TUNING.md)
 for symptom -> method -> parameter guidance backed by measurements on the
 sample data.
 
@@ -99,8 +109,8 @@ panel always reports the count actually being drawn.
 Reproduce with:
 
 ```bash
-uv run python benchmark_display.py                              # the committed cloud
-uv run python benchmark_display.py --generate --points 5000000  # a generated one
+uv run python -m pointcloud_map_gui.tools.benchmark_display                              # the committed cloud
+uv run python -m pointcloud_map_gui.tools.benchmark_display --generate --points 5000000  # a generated one
 ```
 
 Check out the commit before this change and run the same script to get the
@@ -111,7 +121,7 @@ Check out the commit before this change and run the same script to get the
 Isolated points (floating reflections, dust) would otherwise become spurious
 `occupied`/known cells and stretch the map bounds. Noise removal runs first
 and simply deletes those points. Four methods are implemented so they can be
-compared on real data (`noise_removal.py`, all share the same
+compared on real data (`pointcloud_map_gui/noise_removal.py`, all share the same
 `points -> (N,) bool` interface, True = remove):
 
 | Method | Idea | Parameters |
@@ -125,7 +135,7 @@ All of these except `voxel_count` are Open3D calls that hold the GIL for their
 whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
 thread cannot help with that: while one runs, no other Python code executes, so
 the window stops handling the mouse. Estimation therefore runs in a separate
-process (`noise_worker.py`), started at launch and fed the cloud through shared
+process (`pointcloud_map_gui/noise_worker.py`), started at launch and fed the cloud through shared
 memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
 process cannot be started the work falls back to a thread, which is correct but
 freezes the window while it runs.
@@ -134,7 +144,7 @@ To compare them on one file outside the GUI (optionally chaining ground
 removal so the maps reflect the full pipeline):
 
 ```bash
-uv run python compare_noise_removal.py path/to/cloud.pcd --out-dir out/ \
+uv run python -m pointcloud_map_gui.tools.compare_noise_removal path/to/cloud.pcd --out-dir out/ \
     --min-height 0.1 --max-height 1.5 --ground-method pmf --min-blob-cells 3
 ```
 
@@ -149,7 +159,7 @@ A plain height filter cannot separate the floor from low obstacles when the
 floor itself is not flat (slopes, ramps, uneven ground). Ground Removal
 estimates the local floor height at every point and marks points within a
 small distance of it as ground. Three methods are implemented so they can be
-compared on real data (`ground_removal.py`, all share the same
+compared on real data (`pointcloud_map_gui/ground_removal.py`, all share the same
 `points -> (N,) bool` interface):
 
 | Method | Idea | Parameters |
@@ -161,7 +171,7 @@ compared on real data (`ground_removal.py`, all share the same
 To compare the methods on one file outside the GUI:
 
 ```bash
-uv run python compare_ground_removal.py path/to/cloud.pcd --out-dir out/ \
+uv run python -m pointcloud_map_gui.tools.compare_ground_removal path/to/cloud.pcd --out-dir out/ \
     --min-height 0.1 --max-height 1.5 --param pmf.slope=0.5
 ```
 
@@ -190,7 +200,7 @@ comparison.
 ## Sample data
 
 ```bash
-uv run python sample_data/generate_sample.py
+uv run python -m pointcloud_map_gui.tools.generate_sample
 ```
 
 Generates five synthetic point clouds in `sample_data/`. The first four are
@@ -224,16 +234,16 @@ colors points by height and ignores any the file carries).
   sampled at 0.045 m, just under the 0.05 m/cell default resolution -- coarser
   than the grid and the map fills with `unknown` speckle.
 
-`benchmark_display.py --generate --points N` builds a sixth, a warehouse floor
+`python -m pointcloud_map_gui.tools.benchmark_display --generate --points N` builds a sixth, a warehouse floor
 plan of any size, without writing it to disk; `--write PATH` saves one. It is
 what the five-million-point figures above come from, and is not committed
 because at that size the file is 60 MB.
 
 ## Tests
 
-The GUI-independent core logic (`occupancy_grid.py`, `map_writer.py`,
-`colorize.py`, `ground_grid.py`, `ground_removal.py`, `noise_removal.py`,
-`map_preview.py`) can be run headless with
+The GUI-independent core logic (`pointcloud_map_gui/occupancy_grid.py`, `pointcloud_map_gui/map_writer.py`,
+`pointcloud_map_gui/colorize.py`, `pointcloud_map_gui/ground_grid.py`, `pointcloud_map_gui/ground_removal.py`, `pointcloud_map_gui/noise_removal.py`,
+`pointcloud_map_gui/map_preview.py`) can be run headless with
 pytest.
 
 ```bash

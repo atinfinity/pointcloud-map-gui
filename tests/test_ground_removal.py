@@ -1,13 +1,11 @@
 import importlib.util
 import os
-import sys
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ground_removal import (  # noqa: E402
+from pointcloud_map_gui.ground_removal import (  # noqa: E402
     DEFAULT_PARAMS,
     METHODS,
     _bilinear_sample,
@@ -156,7 +154,7 @@ def test_csf_import_leaves_the_environment_alone():
     """CSF is pinned to one thread only for its own load. Leaving the variable
     set would follow every child process and cost the noise methods, which do
     scale with threads, up to 2.7x."""
-    import ground_removal as gr
+    from pointcloud_map_gui import ground_removal as gr
 
     before = os.environ.get("OMP_NUM_THREADS")
     gr._import_csf()
@@ -172,7 +170,7 @@ def test_csf_returns_the_same_answer_every_time():
         pytest.skip("sample_ramp.ply has not been generated")
     import open3d as o3d
 
-    import ground_removal as gr
+    from pointcloud_map_gui import ground_removal as gr
 
     points = np.asarray(o3d.io.read_point_cloud(path).points)
     params = gr.default_params("csf")

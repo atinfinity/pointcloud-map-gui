@@ -1,12 +1,9 @@
-import os
-import sys
 
 import numpy as np
 import pytest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from noise_removal import (  # noqa: E402
+from pointcloud_map_gui.noise_removal import (  # noqa: E402
     DEFAULT_PARAMS,
     METHODS,
     default_params,

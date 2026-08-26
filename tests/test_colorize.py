@@ -1,11 +1,8 @@
-import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from colorize import GRAY_OUT_COLOR, fade_to_background, height_colormap_colors
+from pointcloud_map_gui.colorize import GRAY_OUT_COLOR, fade_to_background, height_colormap_colors
 
 
 def test_colors_vary_with_height():

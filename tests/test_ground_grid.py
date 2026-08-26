@@ -1,11 +1,8 @@
-import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from ground_grid import MARGIN_CELLS, build_ground_grid_lines, nice_step
+from pointcloud_map_gui.ground_grid import MARGIN_CELLS, build_ground_grid_lines, nice_step
 
 
 def test_nice_step_rounds_to_1_2_5_sequence():

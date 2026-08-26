@@ -13,16 +13,16 @@ import open3d.core as o3c
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 
-from colorize import fade_to_background, height_colormap_colors
-from display_lod import select_display_indices
-from ground_grid import build_ground_grid_lines
-import ground_removal
-import noise_removal
-from map_preview import downsample_to_thumbnail
-from map_writer import export_map
-from noise_worker import NoiseWorker
-from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
-from pointcloud_io import load_point_cloud
+from .colorize import fade_to_background, height_colormap_colors
+from .display_lod import select_display_indices
+from .ground_grid import build_ground_grid_lines
+from . import ground_removal
+from . import noise_removal
+from .map_preview import downsample_to_thumbnail
+from .map_writer import export_map
+from .noise_worker import NoiseWorker
+from .occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
+from .pointcloud_io import load_point_cloud
 
 POINTS_NAME = "pointcloud"
 NOISE_COLOR = np.array([1.0, 0.3, 0.3])

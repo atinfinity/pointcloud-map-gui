@@ -1,18 +1,16 @@
 import os
-import sys
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from occupancy_grid import (
+from pointcloud_map_gui.occupancy_grid import (
     FREE_VALUE,
     OCCUPIED_VALUE,
     UNKNOWN_VALUE,
     compute_occupancy_grid,
     remove_small_occupied_blobs,
 )
-from map_writer import export_map
+from pointcloud_map_gui.map_writer import export_map
 
 
 def make_synthetic_cloud():

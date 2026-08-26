@@ -20,19 +20,15 @@ live renderer.
 """
 import argparse
 import os
-import sys
 import threading
 import time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "sample_data"))
+from .. import paths
+from .generate_sample import build_benchmark_point_cloud
 
 
 def build_benchmark_cloud(n_points):
     """The cloud the README numbers come from: see generate_sample.py."""
-    from generate_sample import build_benchmark_point_cloud  # noqa: PLC0415
-
     return build_benchmark_point_cloud(n_points)
 
 
@@ -93,15 +89,15 @@ def main(argv=None):
 
     import open3d.visualization.gui as gui
 
-    import app
-    from pointcloud_io import load_point_cloud
+    from . import app
+    from ..pointcloud_io import load_point_cloud
 
     if args.generate:
         pcd = build_benchmark_cloud(args.points)
         label = f"generated warehouse scene ({len(pcd.points):,} points)"
     else:
-        path = args.input or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "sample_data", "sample_large_site.pcd"
+        path = args.input or str(
+            paths.require_sample_data_dir() / "sample_large_site.pcd"
         )
         pcd = load_point_cloud(path)
         label = f"{os.path.basename(path)} ({len(pcd.points):,} points)"

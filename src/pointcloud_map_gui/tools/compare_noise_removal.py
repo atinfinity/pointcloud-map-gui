@@ -16,18 +16,14 @@ plus out/<name>_none.pgm/.yaml as the no-removal baseline.
 """
 import argparse
 import os
-import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-import ground_removal  # noqa: E402
-import noise_removal  # noqa: E402
-from colorize import height_colormap_colors  # noqa: E402
-from map_writer import export_map  # noqa: E402
-from occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs  # noqa: E402
+from .. import ground_removal, noise_removal
+from ..colorize import height_colormap_colors
+from ..map_writer import export_map
+from ..occupancy_grid import compute_occupancy_grid, remove_small_occupied_blobs
 
 NOISE_COLOR = np.array([1.0, 0.0, 0.0])
 
@@ -81,7 +77,7 @@ def main(argv=None):
 
     import open3d as o3d
 
-    from pointcloud_io import load_point_cloud
+    from ..pointcloud_io import load_point_cloud
 
     points = np.asarray(load_point_cloud(args.input).points)
     n = points.shape[0]
