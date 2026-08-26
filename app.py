@@ -38,6 +38,10 @@ NOISE_DISPLAY_COLOR = fade_to_background(NOISE_COLOR, OUT_OF_RANGE_ALPHA, SCENE_
 # shows: the view is thinned to this many points unless the user raises it.
 # The occupancy grid and the export always use the full cloud.
 DEFAULT_MAX_DISPLAY_POINTS = 1_000_000
+# Upper bound and pre-layout fallback for the preview thumbnail. The real
+# size is whatever _on_layout gives the widget: handing it a larger image and
+# letting it scale down would undo the obstacle-preserving reduction in
+# map_preview and drop thin walls again.
 MAP_PREVIEW_MAX_DIM = 800
 MAP_PREVIEW_ALPHA = 128  # 0-255 (~0.5); the overlay lets the point cloud show through
 PREVIEW_SCENE_WIDTH_FRACTION = 0.2  # overlay side <= 20% of the 3D view width
@@ -149,6 +153,7 @@ class MainWindow:
         # raise these, and the tick handler collapses a burst into one update.
         self._colors_dirty = False
         self._preview_dirty = False
+        self._preview_side = MAP_PREVIEW_MAX_DIM  # replaced by the first layout
 
         # --- 3D scene widget ---
         self.scene_widget = gui.SceneWidget()
@@ -300,6 +305,10 @@ class MainWindow:
             )
         )
         image_side = max(image_side, 1)
+        if image_side != self._preview_side:
+            # Rebuild the thumbnail at the size it will actually be shown at.
+            self._preview_side = image_side
+            self._preview_dirty = True
         image_x = r.x + scene_width - em - image_side
         label_y = r.y + em
         image_y = label_y + label_height + int(0.25 * em)
@@ -557,6 +566,7 @@ class MainWindow:
         min_h, max_h = self._current_height_range()
         resolution = self.resolution_edit.double_value
         min_blob = self.min_blob_edit.int_value
+        max_dim = min(self._preview_side, MAP_PREVIEW_MAX_DIM)
 
         def worker():
             try:
@@ -565,7 +575,7 @@ class MainWindow:
                 )
                 result.grid = remove_small_occupied_blobs(result.grid, min_blob)
                 thumbnail = downsample_to_thumbnail(
-                    result.grid, MAP_PREVIEW_MAX_DIM, alpha=MAP_PREVIEW_ALPHA
+                    result.grid, max_dim, alpha=MAP_PREVIEW_ALPHA
                 )
             except ValueError:
                 return  # e.g. an inverted height range; keep the last good preview
