@@ -18,7 +18,7 @@ compared on real data (`pointcloud_map_gui/noise_removal.py`, all share the same
 | `radius` | Fewer than `min_neighbors` points within `radius` -> noise (`remove_radius_outlier`). The literal definition of "isolated". | `radius`, `min_neighbors` |
 | `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
 | `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
-| `scatter` | Neighbourhood that fills a volume rather than covering a surface -> noise, if enough of its neighbours agree. For the haze a moving object leaves in a SLAM map. The only method here that does not count neighbours, and the only one that still works once that haze is as dense as the walls. | `knn`, `max_scatter`, `agreement` |
+| `scatter` | Neighbourhood that fills a volume rather than covering a surface -> noise, if enough of its neighbours agree. For the haze a moving object leaves in a SLAM map. The only method here that does not count neighbours, and the only one whose accuracy holds as that haze gets denser. | `knn`, `max_scatter`, `agreement` |
 
 All of these except `voxel_count` are Open3D calls that hold the GIL for their
 whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
@@ -28,6 +28,43 @@ process (`pointcloud_map_gui/noise_worker.py`), started at launch and fed the cl
 memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
 process cannot be started the work falls back to a thread, which is correct but
 freezes the window while it runs.
+
+### Which method finds haze depends on how dense it is
+
+A moving object leaves points spread through the volume it moved through. How
+many depends on how long it was in view, and that decides which method can find
+it. Recall against the same haze at a range of densities, on the geometry of
+`sample_haze`, whose structure has 21 neighbours within 10 cm:
+
+| Haze density | `radius` | `statistical` | `cluster` | `scatter` |
+|---:|---:|---:|---:|---:|
+| 1 | **0.99** | 0.98 | 0.98 | 0.80 |
+| 2 | **0.98** | 0.96 | 0.98 | 0.88 |
+| 3 | **0.96** | 0.74 | 0.62 | 0.91 |
+| 5 | 0.75 | 0.41 | 0.29 | **0.93** |
+| 10 | 0.43 | 0.21 | 0.12 | **0.95** |
+| 18 | 0.23 | 0.12 | 0.06 | **0.96** |
+| 34 | 0.11 | 0.07 | 0.03 | **0.97** |
+
+Thin haze is a density problem and `radius` solves it outright. From about a
+quarter of the surrounding density upward, counting neighbours stops working --
+by the time the haze matches the walls `radius` finds one point in ten -- while
+`scatter` barely moves, because a volume does not take on the shape of a
+surface however many points are in it.
+
+Measure yours before choosing:
+
+```bash
+uv run python -c "
+import numpy as np, sys
+from scipy.spatial import cKDTree
+from pointcloud_map_gui.pointcloud_io import load_point_cloud
+p = np.asarray(load_point_cloud(sys.argv[1]).points)
+d = cKDTree(p).query_ball_point(p, 0.1, workers=-1, return_length=True)
+for q in (10, 50, 90):
+    print(q, np.percentile(d, q))
+" your_cloud.pcd
+```
 
 ### How `scatter` decides
 

@@ -221,10 +221,11 @@ def build_haze_point_cloud():
     is seen from a new angle in every scan, and the accumulated points fill a
     volume instead of covering a surface. See koide3/glim#240.
 
-    It is deliberately as dense as the walls. Sparse haze is what `radius` and
-    `statistical` already remove; the haze that survives them, and the reason
-    `scatter` exists, is the dense kind -- once its local density passes the
-    surfaces', counting neighbours cannot tell the two apart at all.
+    The haze is sparser than the walls -- about 5 neighbours within 10 cm
+    against the structure's 21 -- because that is the range a real export sits
+    in. It matters which side of that ratio a sample lands on: sparser still
+    and counting neighbours is enough, denser and nothing but shape can tell
+    them apart. See docs/algorithms.md for the whole curve.
 
     The haze is coloured red and sits at the end of the cloud, so a comparison
     can score against it.
@@ -252,7 +253,7 @@ def build_haze_point_cloud():
     path = np.stack(
         [1.2 + 3.6 * poses, 1.6 + 2.6 * np.sin(2.2 * poses), np.zeros_like(poses)], axis=1
     )
-    body = rng.normal(0.0, [0.22, 0.22, 0.45], size=(path.shape[0], 300, 3))
+    body = rng.normal(0.0, [0.22, 0.22, 0.45], size=(path.shape[0], 40, 3))
     body[:, :, 2] += 0.95
     haze = (path[:, None, :] + body).reshape(-1, 3)
 

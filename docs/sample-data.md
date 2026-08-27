@@ -40,9 +40,11 @@ colors points by height and ignores any the file carries).
   map records someone who walked with the robot -- see
   [koide3/glim#240](https://github.com/koide3/glim/issues/240). The haze is
   coloured red and sits at the end of the cloud, so a comparison can score
-  against it. It is deliberately *denser* than the walls (34 neighbours within
-  10 cm against 21): sparse haze is what `radius` and `statistical` already
-  remove, and the haze that survives them is the reason `scatter` exists.
+  against it. Its density is about a quarter of the structure's -- 5 neighbours
+  within 10 cm against 21 -- which is where a real export was reported to sit,
+  and where the methods start to disagree: `radius` finds three quarters of it,
+  `scatter` all but a tenth. Thinner and any of them would do; denser and only
+  `scatter` would.
 - `sample_large_site`: a 50 x 50 m outdoor yard at 1,554,944 points -- survey
   scale, sparser than an indoor scan but spread over 25x the area. A perimeter
   fence, three buildings, three shipping containers and gently undulating

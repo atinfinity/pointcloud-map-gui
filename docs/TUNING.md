@@ -42,13 +42,17 @@ removed cannot be fixed by the height filter.
   chair legs) disappearing -> lower it.
 - `cluster` splits a real wall into small pieces and deletes them -> raise
   `eps` (default 0.10 m) to roughly 2-3x the point spacing on the walls.
-| A haze where a person or vehicle moved through the scan -- [koide3/glim#240](https://github.com/koide3/glim/issues/240) | `scatter` | Nothing else touches it. Once the haze is as dense as the walls, which is when it survives to be a problem, counting neighbours cannot separate them: on `sample_haze` `cluster` recovers 3% of it, `radius` 11%, `statistical` 7%, and `scatter` 97% at perfect precision. |
+| A haze where a person or vehicle moved through the scan -- [koide3/glim#240](https://github.com/koide3/glim/issues/240) | `scatter`, unless the haze is very thin | On `sample_haze`, whose haze sits at about a quarter of the structure's density, `scatter` recovers 93% of it against `radius`'s 75%, `statistical`'s 41% and `cluster`'s 29% -- none of them touching the structure. Thinner than that and `radius` wins outright; denser and `scatter` is the only thing that still works. The whole curve is in [algorithms.md](algorithms.md). |
 
 - `scatter` eating corners and edges -> raise `agreement` (0.9 default; 0
   disables the check entirely and is a good way to see what it was doing).
-- `scatter` missing haze -> lower `max_scatter` first; the two populations are
-  usually far apart, so if that does not help the haze is probably too thin
-  for `agreement`, and `radius` is the better tool.
+- `scatter` missing haze -> lower `agreement` first. On `sample_haze`, 0.9 ->
+  0.5 buys recall 0.93 -> 0.95 and still takes no structure; below that it
+  starts to. `max_scatter` is rarely the problem, since surface and volume sit
+  two orders of magnitude apart and the threshold has room either side.
+- Very thin haze is a density problem, not a shape one. If `scatter` and
+  `radius` both struggle, check the density against the table in
+  [algorithms.md](algorithms.md).
 - **`scatter`'s defaults come from synthetic data.** They have not been checked
   against a real SLAM export. Run `compare_noise_removal` on your own cloud
   before trusting them.
