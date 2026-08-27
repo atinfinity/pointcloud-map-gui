@@ -18,6 +18,7 @@ compared on real data (`pointcloud_map_gui/noise_removal.py`, all share the same
 | `radius` | Fewer than `min_neighbors` points within `radius` -> noise (`remove_radius_outlier`). The literal definition of "isolated". | `radius`, `min_neighbors` |
 | `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
 | `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
+| `plane_fit` | Distance to a plane fitted through the `knn` nearest neighbours, judged against their own spread (`nsigma`) or a fixed distance (`max_error`, 0 = use `nsigma`). CloudCompare's "noise filter". The only method here that looks at *shape*: it is the one that can see a point sitting off a surface it still has plenty of neighbours on, and the only one that cannot see a point alone in space. | `knn`, `nsigma`, `max_error` |
 
 All of these except `voxel_count` are Open3D calls that hold the GIL for their
 whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
@@ -27,6 +28,11 @@ process (`pointcloud_map_gui/noise_worker.py`), started at launch and fed the cl
 memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
 process cannot be started the work falls back to a thread, which is correct but
 freezes the window while it runs.
+
+`statistical` is the same algorithm as CloudCompare's **SOR filter** -- mean
+k-NN distance against the cloud-wide mean and standard deviation. The two
+differ only in whether the point itself counts toward `k`, which moves the
+result by well under a tenth of a percent.
 
 To compare them on one file outside the GUI (optionally chaining ground
 removal so the maps reflect the full pipeline):

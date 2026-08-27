@@ -36,6 +36,14 @@ colors points by height and ignores any the file carries).
   each level and one on the ramp, plus a floating obstacle. The lower box's
   top is below the upper floor, and the flat/slope breaklines are where
   DEM-based ground removal is most likely to misclassify.
+- `sample_range_noise`: a clean 6 x 6 m room whose surfaces carry scanner range
+  noise -- every wall and floor point displaced along the local normal by about
+  8 mm, and one point in forty by five times that. The far tail is coloured red
+  and sits at the end of the cloud, so a comparison can score against it. The
+  other noisy sample scatters points into empty space, which is a different
+  problem: this one is what `plane_fit` is for, and what the density-based
+  methods cannot see, since a point 5 cm off a wall still has plenty of close
+  neighbours.
 - `sample_large_site`: a 50 x 50 m outdoor yard at 1,554,944 points -- survey
   scale, sparser than an indoor scan but spread over 25x the area. A perimeter
   fence, three buildings, three shipping containers and gently undulating

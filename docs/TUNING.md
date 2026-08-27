@@ -42,6 +42,17 @@ removed cannot be fixed by the height filter.
   chair legs) disappearing -> lower it.
 - `cluster` splits a real wall into small pieces and deletes them -> raise
   `eps` (default 0.10 m) to roughly 2-3x the point spacing on the walls.
+| Points sit *on* the surfaces but scattered off them -- scanner range noise, a fuzzy wall | `plane_fit` | The only method that measures shape. On `sample_range_noise`, where 2.5% of points were displaced along the surface normal: `plane_fit` at the defaults removes 2,727 and `statistical` 2,038, but of what they remove `plane_fit` is right 57% of the time against `statistical`'s 63% at similar recall -- and with `max_error` 0.03 (a known scanner accuracy) `plane_fit` is right 98% of the time. `cluster` and `radius` find almost none of it: 3% and 8% recall. |
+| Both kinds at once | `plane_fit` **and** `cluster` | They see different things and barely overlap -- IoU 0.03 on that cloud. Run noise removal twice, or pick the one matching the dominant problem. |
+
+- `plane_fit` `nsigma` reads stricter than a z-score: the neighbours' spread
+  is shrunk by having been fitted to, while the point's distance carries the
+  plane's estimation error too. nsigma 3 takes a few percent of a cleanly
+  noisy surface, not 0.27%. Raise `knn` before lowering `nsigma` -- 8 -> 20
+  neighbours lifted precision from 0.20 to 0.57 at the same recall.
+- `plane_fit` cannot see a point alone in space, by construction: its
+  neighbours are then other scattered points, which describe no surface. Pair
+  it with `radius` or `cluster` rather than expecting it to cover both.
 - `radius`/`statistical` deleting wall points -> lower `min_neighbors` /
   raise `std_ratio`, or increase `radius` / `nb_neighbors` so sparse but
   real surfaces have enough neighbours.

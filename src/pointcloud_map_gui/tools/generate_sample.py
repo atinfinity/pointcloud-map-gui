@@ -214,6 +214,68 @@ def build_ramp_point_cloud():
     return _point_cloud(points, colors)
 
 
+def build_range_noise_point_cloud():
+    """A clean room whose surfaces carry scanner range noise.
+
+    The other noisy sample scatters points into empty space, which is what
+    `cluster` and `radius` are for. This one displaces points along the
+    surface they belong to: every wall and floor point moves a little way
+    along the local normal, and one point in forty moves five times further.
+    That far tail is what a plane-fit filter is for and what the per-point
+    tests cannot see -- a point 5 cm off a wall still has plenty of close
+    neighbours.
+
+    The last `n_far` points of the cloud are the displaced ones, so a
+    comparison can score against them.
+    """
+    rng = np.random.default_rng(7)
+    near_sigma, far_sigma, far_fraction = 0.008, 0.05, 0.025
+
+    # floor at z=0, four walls: normal is +z for the floor, the axis each
+    # wall is flat in for the walls.
+    step = 0.03
+    fx, fy = np.meshgrid(np.arange(0, 6, step), np.arange(0, 6, step))
+    floor = np.stack([fx.ravel(), fy.ravel(), np.zeros(fx.size)], axis=1)
+    floor_n = np.tile([0.0, 0.0, 1.0], (floor.shape[0], 1))
+
+    def wall(x0, y0, x1, y1, height=2.5):
+        n_len = int(np.hypot(x1 - x0, y1 - y0) / step)
+        n_h = int(height / step)
+        t, h = np.meshgrid(np.linspace(0, 1, n_len), np.linspace(0, height, n_h))
+        pts = np.stack(
+            [x0 + (x1 - x0) * t.ravel(), y0 + (y1 - y0) * t.ravel(), h.ravel()], axis=1
+        )
+        along = np.array([x1 - x0, y1 - y0, 0.0])
+        normal = np.array([-along[1], along[0], 0.0])
+        normal /= np.linalg.norm(normal)
+        return pts, np.tile(normal, (pts.shape[0], 1))
+
+    parts, normals = [floor], [floor_n]
+    for edge in ((0, 0, 6, 0), (6, 0, 6, 6), (6, 6, 0, 6), (0, 6, 0, 0)):
+        p, n = wall(*edge)
+        parts.append(p)
+        normals.append(n)
+    points = np.vstack(parts)
+    normal = np.vstack(normals)
+
+    # Split first, so the far points end up together at the end of the cloud
+    # and stay identifiable.
+    n_total = points.shape[0]
+    far = rng.random(n_total) < far_fraction
+    order = np.concatenate([np.flatnonzero(~far), np.flatnonzero(far)])
+    points, normal = points[order], normal[order]
+    n_far = int(far.sum())
+
+    offset = np.empty(n_total)
+    offset[: n_total - n_far] = rng.normal(0.0, near_sigma, n_total - n_far)
+    offset[n_total - n_far :] = rng.normal(0.0, far_sigma, n_far)
+    points = points + normal * offset[:, None]
+
+    colors = np.tile([0.6, 0.6, 0.65], (n_total, 1))
+    colors[n_total - n_far :] = [0.9, 0.2, 0.2]
+    return _point_cloud(points, colors)
+
+
 # --- large site ------------------------------------------------------------
 # A 50 x 50 m outdoor yard, for exercising the tool at survey scale: sparser
 # than an indoor scan but spread over 25x the area. Everything in it exists so
@@ -442,6 +504,7 @@ def main(argv=None):
         ("sample_slope", build_slope_point_cloud),
         ("sample_slope_noisy", build_noisy_slope_point_cloud),
         ("sample_ramp", build_ramp_point_cloud),
+        ("sample_range_noise", build_range_noise_point_cloud),
     ):
         pcd = builder()
         pcd_path = os.path.join(out_dir, f"{name}.pcd")

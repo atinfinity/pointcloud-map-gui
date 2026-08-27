@@ -33,7 +33,15 @@ def make_isolated(n=200, seed=0):
     return rng.uniform([0.2, 0.2, 0.5], [3.5, 3.8, 3.0], size=(n, 3))
 
 
-@pytest.mark.parametrize("method", list(METHODS))
+# plane_fit is excluded on purpose. It asks whether a point sits off the
+# surface its neighbours describe, and scattered points have no surface to sit
+# off -- 80% of each one's neighbours here are other scattered points. Density
+# is what radius and cluster are for; see test_plane_fit.py, which pins that
+# boundary down from the other side.
+DENSITY_METHODS = [m for m in METHODS if m != "plane_fit"]
+
+
+@pytest.mark.parametrize("method", DENSITY_METHODS)
 def test_isolated_points_removed_structure_kept(method):
     structure = make_structure()
     isolated = make_isolated()
