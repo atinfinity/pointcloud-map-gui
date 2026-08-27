@@ -999,7 +999,28 @@ class MainWindow:
         self.window.set_needs_layout()
 
 
+def _prefer_x11_under_wsl():
+    """Keep GLFW off WSLg's Wayland compositor.
+
+    The GLFW bundled with Open3D 0.19 auto-selects Wayland whenever a
+    compositor socket is reachable, and under WSLg that path never reaches a
+    GL context: the legacy visualizer reports "Failed to initialize GLEW" and
+    the GUI's Filament backend blocks inside create_window(), so the command
+    hangs with no window ever appearing. WSLg also exports an X server, which
+    does work, and GLFW honours XDG_SESSION_TYPE when picking between the two.
+    WSLg leaves that variable unset, so setting it here is enough -- and only
+    then, so a real Wayland session, or a user who chose a value deliberately,
+    is left alone.
+    """
+    if os.environ.get("XDG_SESSION_TYPE") or not os.environ.get("DISPLAY"):
+        return
+    if not os.environ.get("WSL_DISTRO_NAME") and not os.environ.get("WSL_INTEROP"):
+        return
+    os.environ["XDG_SESSION_TYPE"] = "x11"
+
+
 def run():
+    _prefer_x11_under_wsl()
     # Start the estimation process before the GUI. Spawning is cheapest while
     # this process is still simple, and a child started afterwards would
     # inherit whatever state Open3D's own threads are in.
