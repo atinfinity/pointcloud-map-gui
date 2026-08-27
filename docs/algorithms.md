@@ -18,6 +18,7 @@ compared on real data (`pointcloud_map_gui/noise_removal.py`, all share the same
 | `radius` | Fewer than `min_neighbors` points within `radius` -> noise (`remove_radius_outlier`). The literal definition of "isolated". | `radius`, `min_neighbors` |
 | `statistical` | Mean distance to `nb_neighbors` nearest points exceeds the cloud-wide mean + `std_ratio` x std -> noise (`remove_statistical_outlier`). Adapts to point density. | `nb_neighbors`, `std_ratio` |
 | `voxel_count` | Voxel containing fewer than `min_points` points -> noise. Fastest, pure numpy, but grid-aligned so it can clip thin structures. | `voxel_size`, `min_points` |
+| `scatter` | Neighbourhood that fills a volume rather than covering a surface -> noise, if enough of its neighbours agree. For the haze a moving object leaves in a SLAM map. The only method here that does not count neighbours, and the only one that still works once that haze is as dense as the walls. | `knn`, `max_scatter`, `agreement` |
 
 All of these except `voxel_count` are Open3D calls that hold the GIL for their
 whole duration -- 3.0 s for `cluster` on a 1.5-million-point cloud. A worker
@@ -27,6 +28,30 @@ process (`pointcloud_map_gui/noise_worker.py`), started at launch and fed the cl
 memory, which keeps the GUI at a 5 ms worst-case stall instead of 2.9 s. If the
 process cannot be started the work falls back to a thread, which is correct but
 freezes the window while it runs.
+
+### How `scatter` decides
+
+Take the covariance of a point's `knn` neighbours and compare its smallest
+eigenvalue to its largest. On a surface the points are thin in the normal
+direction, so the ratio is near zero; a volume spreads in all three, so it is
+not. On `sample_haze` the two populations sit two orders of magnitude apart --
+0.006 for the walls against 0.507 for the haze -- so where `max_scatter` falls
+between them hardly matters.
+
+`agreement` is the part that needs care. Where two surfaces meet, the
+neighbourhood spans both and scatters like a volume, so a corner or an edge
+reads as haze. Only in a thin band, though: the neighbours of a corner point
+are mostly still flat. Requiring that a fraction of them scatter too keeps
+corners and edges -- on `sample_haze` it takes the structure wrongly removed
+from 1,289 points down to 80 -- and costs almost nothing, because their
+neighbourhoods have already been found.
+
+Two things follow from that, and neither is a tuning problem:
+
+- **Vegetation, mesh fences and hanging cables are volumes too.** This cannot
+  tell them from haze. Bound it by height or region if the cloud has any.
+- **A thin scattering of points does not agree with itself**, so `scatter`
+  will not remove it. That is `radius`'s and `cluster`'s job; pair them.
 
 To compare them on one file outside the GUI (optionally chaining ground
 removal so the maps reflect the full pipeline):

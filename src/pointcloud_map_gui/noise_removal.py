@@ -13,8 +13,17 @@ estimation and occupancy grid generation (so they cannot enlarge the map).
 - ``voxel_count``: voxel holding fewer than ``min_points`` -> noise (numpy only).
 - ``cluster``: DBSCAN; unlabeled points and clusters smaller than
   ``min_cluster_size`` -> noise.
+- ``scatter``: neighbourhood that fills a volume rather than covering a
+  surface -> noise. For what a moving object leaves behind in a SLAM map;
+  the only method here that does not count neighbours, and so the only one
+  that still works once the haze is as dense as the walls.
 """
 import numpy as np
+
+# Neighbour coordinates are materialised a slice at a time; see scatter.
+_SCATTER_CHUNK = 200_000
+# Guards the eigenvalue ratio where a neighbourhood has collapsed to a point.
+_SCATTER_EPS = 1e-30
 
 # name -> (default, min, max); ints are shown as integer fields in the GUI.
 # Dict order is the GUI/CLI order; the first entry is the default method.
@@ -39,6 +48,11 @@ DEFAULT_PARAMS = {
         "voxel_size": (0.10, 0.01, 2.0),
         "min_points": (4, 1, 100),
     },
+    "scatter": {
+        "knn": (30, 6, 200),
+        "max_scatter": (0.20, 0.01, 1.0),
+        "agreement": (0.9, 0.0, 1.0),
+    },
 }
 
 METHOD_LABELS = {
@@ -46,6 +60,7 @@ METHOD_LABELS = {
     "radius": "Radius outlier",
     "statistical": "Statistical outlier",
     "voxel_count": "Voxel point count",
+    "scatter": "Scatter (haze / moving objects)",
 }
 
 
@@ -123,11 +138,76 @@ def noise_mask_cluster(points, eps=0.10, min_points=4, min_cluster_size=50):
     return noise
 
 
+def noise_mask_scatter(points, knn=30, max_scatter=0.20, agreement=0.9):
+    """Points whose neighbourhood fills a volume instead of covering a surface.
+
+    A person walking with the robot is seen from a new angle in every scan, and
+    what accumulates in the map is a haze filling the space they moved through
+    rather than a surface. Every other method here counts neighbours, and once
+    that haze is as dense as the walls -- which is exactly when it survives to
+    be a problem -- counting cannot separate them: measured on sample_haze,
+    `radius` and `statistical` fall to 0.08 recall.
+
+    Shape can. Take the covariance of each point's `knn` neighbours: on a
+    surface the smallest eigenvalue is near zero, because the points are thin
+    in the normal direction, while a volume spreads in all three. The ratio of
+    smallest to largest separates the two by two orders of magnitude on that
+    cloud -- 0.006 against 0.507 -- so where the threshold sits between them
+    hardly matters.
+
+    What does matter is `agreement`. Where two surfaces meet, the neighbourhood
+    spans both and scatters like a volume, so a corner or an edge reads as
+    haze. But only in the thin band along the join: the neighbours of a corner
+    point are mostly still flat. Requiring that a given fraction of them scatter
+    too keeps corners and edges, and costs almost nothing, since their
+    neighbourhoods were found already. On sample_haze it takes the corner and
+    edge points wrongly removed from 1,878 down to 19.
+
+    This is the "scattering" of the eigenvalue features in Weinmann et al.
+    (2015). Vegetation, mesh fences and hanging cables are volumes too, and
+    this cannot tell them from haze -- bound it by height or region if the
+    cloud has any.
+    """
+    points = _validate_points(points)
+    knn = int(knn)
+    if knn < 6:
+        raise ValueError("knn must be >= 6")  # fewer cannot describe a volume
+    if not 0.0 < max_scatter <= 1.0:
+        raise ValueError("max_scatter must be in (0, 1]")
+    if not 0.0 <= agreement <= 1.0:
+        raise ValueError("agreement must be in [0, 1]")
+    n = points.shape[0]
+    if n <= knn:
+        return np.zeros(n, dtype=bool)  # no neighbourhood to describe
+
+    from scipy.spatial import cKDTree  # noqa: PLC0415 - keeps import cost off startup
+
+    tree = cKDTree(points)
+    scatter = np.empty(n)
+    neighbours = np.empty((n, knn), dtype=np.int64)
+    for start in range(0, n, _SCATTER_CHUNK):
+        stop = min(start + _SCATTER_CHUNK, n)
+        _, index = tree.query(points[start:stop], k=knn + 1, workers=-1)
+        neighbours[start:stop] = index[:, 1:]  # column 0 is the point itself
+        block = points[index]
+        centred = block - block.mean(axis=1, keepdims=True)
+        covariance = np.einsum("mkj,mkl->mjl", centred, centred) / block.shape[1]
+        eigenvalues = np.linalg.eigvalsh(covariance)  # ascending
+        largest = np.maximum(eigenvalues[:, 2], _SCATTER_EPS)
+        scatter[start:stop] = eigenvalues[:, 0] / largest
+
+    volumetric = scatter > float(max_scatter)
+    if agreement <= 0.0:
+        return volumetric
+    return volumetric & (volumetric[neighbours].mean(axis=1) >= float(agreement))
+
+
 METHODS = {
     "cluster": noise_mask_cluster,
     "radius": noise_mask_radius,
     "statistical": noise_mask_statistical,
     "voxel_count": noise_mask_voxel_count,
+    "scatter": noise_mask_scatter,
 }
 
 

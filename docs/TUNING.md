@@ -42,6 +42,16 @@ removed cannot be fixed by the height filter.
   chair legs) disappearing -> lower it.
 - `cluster` splits a real wall into small pieces and deletes them -> raise
   `eps` (default 0.10 m) to roughly 2-3x the point spacing on the walls.
+| A haze where a person or vehicle moved through the scan -- [koide3/glim#240](https://github.com/koide3/glim/issues/240) | `scatter` | Nothing else touches it. Once the haze is as dense as the walls, which is when it survives to be a problem, counting neighbours cannot separate them: on `sample_haze` `cluster` recovers 3% of it, `radius` 11%, `statistical` 7%, and `scatter` 97% at perfect precision. |
+
+- `scatter` eating corners and edges -> raise `agreement` (0.9 default; 0
+  disables the check entirely and is a good way to see what it was doing).
+- `scatter` missing haze -> lower `max_scatter` first; the two populations are
+  usually far apart, so if that does not help the haze is probably too thin
+  for `agreement`, and `radius` is the better tool.
+- **`scatter`'s defaults come from synthetic data.** They have not been checked
+  against a real SLAM export. Run `compare_noise_removal` on your own cloud
+  before trusting them.
 - `radius`/`statistical` deleting wall points -> lower `min_neighbors` /
   raise `std_ratio`, or increase `radius` / `nb_neighbors` so sparse but
   real surfaces have enough neighbours.

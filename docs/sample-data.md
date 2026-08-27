@@ -36,6 +36,13 @@ colors points by height and ignores any the file carries).
   each level and one on the ramp, plus a floating obstacle. The lower box's
   top is below the upper floor, and the flat/slope breaklines are where
   DEM-based ground removal is most likely to misclassify.
+- `sample_haze`: a 6 x 6 m room with an operator smeared through it, as a SLAM
+  map records someone who walked with the robot -- see
+  [koide3/glim#240](https://github.com/koide3/glim/issues/240). The haze is
+  coloured red and sits at the end of the cloud, so a comparison can score
+  against it. It is deliberately *denser* than the walls (34 neighbours within
+  10 cm against 21): sparse haze is what `radius` and `statistical` already
+  remove, and the haze that survives them is the reason `scatter` exists.
 - `sample_large_site`: a 50 x 50 m outdoor yard at 1,554,944 points -- survey
   scale, sparser than an indoor scan but spread over 25x the area. A perimeter
   fence, three buildings, three shipping containers and gently undulating

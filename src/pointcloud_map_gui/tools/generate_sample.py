@@ -214,6 +214,54 @@ def build_ramp_point_cloud():
     return _point_cloud(points, colors)
 
 
+def build_haze_point_cloud():
+    """A room with an operator smeared through it.
+
+    What a moving object leaves in a SLAM map: someone walking with the robot
+    is seen from a new angle in every scan, and the accumulated points fill a
+    volume instead of covering a surface. See koide3/glim#240.
+
+    It is deliberately as dense as the walls. Sparse haze is what `radius` and
+    `statistical` already remove; the haze that survives them, and the reason
+    `scatter` exists, is the dense kind -- once its local density passes the
+    surfaces', counting neighbours cannot tell the two apart at all.
+
+    The haze is coloured red and sits at the end of the cloud, so a comparison
+    can score against it.
+    """
+    rng = np.random.default_rng(31)
+    step = 0.04
+    size, height = 6.0, 2.5
+
+    g = np.arange(0.0, size, step)
+    fx, fy = np.meshgrid(g, g)
+    parts = [np.stack([fx.ravel(), fy.ravel(), np.zeros(fx.size)], axis=1)]
+    for x0, y0, x1, y1 in ((0, 0, size, 0), (size, 0, size, size),
+                           (size, size, 0, size), (0, size, 0, 0)):
+        n_len = int(np.hypot(x1 - x0, y1 - y0) / step)
+        n_h = int(height / step)
+        t, h = np.meshgrid(np.linspace(0, 1, n_len), np.linspace(0, height, n_h))
+        parts.append(np.stack(
+            [x0 + (x1 - x0) * t.ravel(), y0 + (y1 - y0) * t.ravel(), h.ravel()], axis=1
+        ))
+    structure = np.vstack(parts)
+    structure = structure + rng.normal(0.0, 0.004, structure.shape)
+
+    # One body's worth of points per pose, along the path the robot drove.
+    poses = np.linspace(0.0, 1.0, 180)
+    path = np.stack(
+        [1.2 + 3.6 * poses, 1.6 + 2.6 * np.sin(2.2 * poses), np.zeros_like(poses)], axis=1
+    )
+    body = rng.normal(0.0, [0.22, 0.22, 0.45], size=(path.shape[0], 300, 3))
+    body[:, :, 2] += 0.95
+    haze = (path[:, None, :] + body).reshape(-1, 3)
+
+    points = np.vstack([structure, haze])
+    colors = np.tile([0.6, 0.6, 0.65], (points.shape[0], 1))
+    colors[structure.shape[0]:] = [0.9, 0.2, 0.2]
+    return _point_cloud(points, colors)
+
+
 # --- large site ------------------------------------------------------------
 # A 50 x 50 m outdoor yard, for exercising the tool at survey scale: sparser
 # than an indoor scan but spread over 25x the area. Everything in it exists so
@@ -442,6 +490,7 @@ def main(argv=None):
         ("sample_slope", build_slope_point_cloud),
         ("sample_slope_noisy", build_noisy_slope_point_cloud),
         ("sample_ramp", build_ramp_point_cloud),
+        ("sample_haze", build_haze_point_cloud),
     ):
         pcd = builder()
         pcd_path = os.path.join(out_dir, f"{name}.pcd")

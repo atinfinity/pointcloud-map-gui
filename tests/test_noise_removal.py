@@ -33,7 +33,16 @@ def make_isolated(n=200, seed=0):
     return rng.uniform([0.2, 0.2, 0.5], [3.5, 3.8, 3.0], size=(n, 3))
 
 
-@pytest.mark.parametrize("method", list(METHODS))
+# scatter is excluded on purpose. It asks whether a neighbourhood fills a
+# volume, and answers by agreement among neighbours -- which a handful of
+# points scattered through a room cannot reach, because their own neighbours
+# are too few and too mixed. That strictness is what keeps corners and edges,
+# and it is deliberate: sparse scatter is what radius and cluster are for. See
+# test_scatter.py, which pins the boundary from the other side.
+DENSITY_METHODS = [m for m in METHODS if m != "scatter"]
+
+
+@pytest.mark.parametrize("method", DENSITY_METHODS)
 def test_isolated_points_removed_structure_kept(method):
     structure = make_structure()
     isolated = make_isolated()
