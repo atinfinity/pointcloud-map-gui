@@ -38,6 +38,26 @@ def _box_on_floor(floor_z, x0, y0, x1, y1, height, step=0.02):
     return np.vstack([top] + sides)
 
 
+def _point_cloud(points, colors=None):
+    """Build a cloud whose coordinates are exactly representable in float32.
+
+    PLY stores coordinates as double, PCD as float32. Left at full float64
+    precision the two formats disagree about the same cloud across machines:
+    `rng.normal` goes through the ziggurat's exp/log, and those come from the
+    platform's libm, so macOS arm64 and Linux x86_64 differ by one to four ULP
+    -- 1e-16 m, invisible in the .pcd because float32 rounds it away, but baked
+    into the .ply. Rounding here makes both formats carry the same numbers and
+    regenerate to the same bytes anywhere. Coordinates are metres over a few
+    tens of metres, so float32 leaves sub-micron precision; there is nothing to
+    lose.
+    """
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.asarray(points, dtype=np.float32).astype(np.float64))
+    if colors is not None:
+        pcd.colors = o3d.utility.Vector3dVector(np.asarray(colors, dtype=np.float64))
+    return pcd
+
+
 def build_room_point_cloud():
     rng = np.random.default_rng(42)
 
@@ -77,10 +97,7 @@ def build_room_point_cloud():
     points = np.vstack([floor, walls, obstacle])
     colors = np.vstack([floor_color, wall_color, obstacle_color])
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    return pcd
+    return _point_cloud(points, colors)
 
 
 def build_slope_point_cloud():
@@ -119,10 +136,7 @@ def build_slope_point_cloud():
     points = np.vstack([floor, walls, box, obstacle])
     colors = np.vstack([floor_color, wall_color, box_color, obstacle_color])
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    return pcd
+    return _point_cloud(points, colors)
 
 
 def build_noisy_slope_point_cloud():
@@ -149,10 +163,7 @@ def build_noisy_slope_point_cloud():
     noise = np.vstack([scatter] + clusters)
     noise_color = np.tile([1.0, 0.0, 1.0], (noise.shape[0], 1))
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.vstack([points, noise]))
-    pcd.colors = o3d.utility.Vector3dVector(np.vstack([colors, noise_color]))
-    return pcd
+    return _point_cloud(np.vstack([points, noise]), np.vstack([colors, noise_color]))
 
 
 def build_ramp_point_cloud():
@@ -200,10 +211,7 @@ def build_ramp_point_cloud():
     points = np.vstack([floor, walls, boxes, obstacle])
     colors = np.vstack([floor_color, wall_color, box_color, obstacle_color])
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
-    return pcd
+    return _point_cloud(points, colors)
 
 
 # --- large site ------------------------------------------------------------
@@ -324,9 +332,7 @@ def build_large_site_point_cloud():
     for x0, y0, x1, y1, height in SITE_CONTAINERS:
         parts.append(_box_on_floor(floor_z, x0, y0, x1, y1, height, step=step))
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.vstack(parts))
-    return pcd
+    return _point_cloud(np.vstack(parts))
 
 
 # --- benchmark fixture -----------------------------------------------------
@@ -418,9 +424,7 @@ def build_benchmark_point_cloud(n_points=2_000_000):
             )
         )
 
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(np.vstack(parts))
-    return pcd
+    return _point_cloud(np.vstack(parts))
 
 
 def main(argv=None):
