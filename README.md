@@ -61,6 +61,13 @@ uv sync
 uv run pointcloud-map-gui
 ```
 
+The window needs an X server. On WSL that is WSLg, which works, but it also
+advertises a Wayland compositor that Open3D's GLFW prefers and cannot draw on
+-- there the command used to hang with no window. The app now selects X11 for
+itself when it sees WSL and `XDG_SESSION_TYPE` is unset, so nothing is needed
+from you; if you set that variable yourself, your choice is kept. Elsewhere,
+if no window appears, check that `echo $DISPLAY` is not empty.
+
 ## Usage
 
 1. Click "Load Point Cloud (.pcd/.ply)..." and select a point cloud file.
